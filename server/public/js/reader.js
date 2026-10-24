@@ -548,3 +548,33 @@ function sendFollowup() {
   input.value = '';
   askAi(currentAiText || q, currentAiText ? q : null);
 }
+
+
+/* ---------------- End reading ---------------- */
+
+const endReadingBtn = document.getElementById('endReading');
+endReadingBtn.addEventListener('click', async () => {
+  if (!book) return;
+  endReadingBtn.disabled = true;
+  clearTimeout(saveProgressTimer);
+  const stoppedAt = currentVisiblePage;
+  const scrollRatio = readerBody.scrollTop / Math.max(1, readerBody.scrollHeight - readerBody.clientHeight);
+  const body = { lastPage: stoppedAt, lastScrollRatio: scrollRatio };
+  if (pdfDoc) body.totalPages = pdfDoc.numPages;
+  endReadingBtn.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/books/${bookId}/progress`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: true
+    });
+    if (!res.ok) throw new Error('Save failed');
+    endReadingBtn.textContent = `Saved · page ${stoppedAt}`;
+    setTimeout(() => { window.location.href = '/'; }, 700);
+  } catch (err) {
+    endReadingBtn.disabled = false;
+    endReadingBtn.textContent = 'End reading';
+    alert('Could not save your page. Check your connection and try again.');
+  }
+});

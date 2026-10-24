@@ -30,6 +30,52 @@ const upload = multer({
   }
 });
 
+// Tells the frontend which upload strategy to use.
+router.get('/config', (req, res) => res.json({ blob: USE_BLOB }));
+
+// Vercel functions reject request bodies > 4.5MB, so on Vercel the browser uploads the
+// file straight to Vercel Blob. This route only hands out the short-lived upload token.
+router.post('/blob-token', async (req, res) => {
+  if (!USE_BLOB) return res.status(400).json({ error: 'Blob storage is not configured' });
+  try {
+    const { handleUpload } = require('@vercel/blob/client');
+    const json = await handleUpload({
+      body: req.body,
+      request: req,
+      onBeforeGenerateToken: async () => ({
+        allowedContentTypes: ['application/pdf', 'application/epub+zip', 'application/octet-stream'],
+        maximumSizeInBytes: 200 * 1024 * 1024,
+        addRandomSuffix: true
+      }),
+      onUploadCompleted: async () => {} // DB record is created by POST / below
+    });
+    res.json(json);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Create the Book record for a file that was already uploaded to Blob by the browser.
+router.post('/', async (req, res) => {
+  try {
+    const { title, fileUrl, originalName, fileType, fileSize } = req.body;
+    if (!fileUrl || !originalName || !['pdf', 'epub'].includes(fileType)) {
+      return res.status(400).json({ error: 'fileUrl, originalName and fileType (pdf|epub) are required' });
+    }
+    const book = await Book.create({
+      title: (title && title.trim()) || originalName.replace(/\.[^.]+$/, ''),
+      fileUrl,
+      originalName,
+      fileType,
+      fileSize: Number(fileSize) || 0,
+      coverColor: PALETTE[Math.floor(Math.random() * PALETTE.length)]
+    });
+    res.status(201).json(book);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // List all books
 router.get('/', async (req, res) => {
   try {
