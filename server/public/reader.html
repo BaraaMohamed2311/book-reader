@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Reading…</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="reader-root" id="readerRoot">
+    <div class="reader-topbar">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <a href="/" class="btn btn-icon" title="Back to library">←</a>
+        <div class="reader-title" id="readerTitle">Loading…</div>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn btn-icon" id="toolSelect" title="Select / highlight text">✎</button>
+        <button class="btn btn-icon" id="toolDraw" title="Draw / annotate">🖊</button>
+        <span id="colorSwatches" style="display:flex; gap:6px; align-items:center; margin:0 4px;"></span>
+        <button class="btn btn-icon" id="toolErase" title="Eraser (click a highlight or drawing)">⌫</button>
+        <button class="btn btn-icon" id="toolFullscreen" title="Fullscreen">⛶</button>
+        <button class="btn btn-icon" id="toolAi" title="Ask AI about selection">🤖</button>
+      </div>
+    </div>
+
+    <div class="reader-body" id="readerBody">
+      <div class="reader-loading" id="readerLoading">Opening book…</div>
+    </div>
+  </div>
+
+  <div class="selection-bubble" id="selectionBubble" style="display:none;">
+    <button id="bubbleHighlight">🖍 Highlight</button>
+    <button id="bubbleAsk">🤖 Ask AI</button>
+  </div>
+
+  <div class="ai-panel" id="aiPanel">
+    <div class="ai-panel-header">
+      <h3>Ask about this</h3>
+      <button class="btn btn-icon" id="closeAiPanel">✕</button>
+    </div>
+    <div class="ai-panel-body">
+      <div class="ai-source-text" id="aiSourceText"></div>
+      <div id="aiAnswerArea"></div>
+    </div>
+    <div class="ai-panel-footer">
+      <input type="text" id="aiFollowupInput" placeholder="Ask a follow-up…" />
+      <button class="btn btn-primary" id="aiFollowupBtn">Ask</button>
+    </div>
+  </div>
+
+  <script src="/vendor/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.js';
+  </script>
+  <script src="/js/reader.js"></script>
+</body>
+</html>

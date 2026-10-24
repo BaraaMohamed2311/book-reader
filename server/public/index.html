@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Shelf — your synced book reader</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span> Shelf</div>
+    <button class="btn btn-primary" id="openUploadBtn">＋ Add book</button>
+  </div>
+
+  <div class="library">
+    <div class="library-header">
+      <div>
+        <h1>Your library</h1>
+        <p>Upload once, keep reading anywhere — your highlights, drawings and page sync automatically.</p>
+      </div>
+    </div>
+
+    <div id="bookGrid" class="book-grid"></div>
+    <div id="emptyState" class="empty-state" style="display:none;">
+      <div class="big-icon">📚</div>
+      <div>No books yet. Add a PDF or EPUB to get started.</div>
+    </div>
+  </div>
+
+  <!-- Upload modal -->
+  <div class="modal-overlay" id="uploadOverlay" style="display:none;">
+    <div class="modal">
+      <h2>Add a book</h2>
+      <p class="hint">PDF or EPUB, up to 200MB.</p>
+
+      <div class="dropzone" id="dropzone">
+        <div>Click to choose a file, or drag it here</div>
+        <div class="file-chosen" id="fileChosenLabel"></div>
+      </div>
+      <input type="file" id="fileInput" accept=".pdf,.epub" style="display:none;" />
+
+      <div class="field">
+        <label>Title (optional)</label>
+        <input type="text" id="titleInput" placeholder="Defaults to the file name" />
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelUploadBtn">Cancel</button>
+        <button class="btn btn-primary" id="confirmUploadBtn">Upload</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/library.js"></script>
+</body>
+</html>
