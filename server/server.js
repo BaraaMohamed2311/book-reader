@@ -22,6 +22,32 @@ app.use(express.urlencoded({ extended: true }));
 // Serve the frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/book_reader';
+const IS_SERVERLESS = Boolean(process.env.VERCEL);
+
+// On Vercel, each invocation can reuse a warm Node process, so we cache the
+// connection promise instead of calling mongoose.connect() on every request.
+let mongoReady = null;
+function ensureMongo() {
+  if (!mongoReady) {
+    mongoReady = mongoose.connect(MONGO_URI).then(() => {
+      console.log('Connected to MongoDB');
+    });
+  }
+  return mongoReady;
+}
+
+if (IS_SERVERLESS) {
+  app.use(async (req, res, next) => {
+    try {
+      await ensureMongo();
+      next();
+    } catch (err) {
+      res.status(500).json({ error: 'Database connection failed: ' + err.message });
+    }
+  });
+}
+
 // API routes
 app.use('/api/books', booksRouter);
 app.use('/api/annotations', annotationsRouter);
@@ -34,16 +60,17 @@ app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const PORT = process.env.PORT || 4000;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/book_reader';
-
-mongoose
-  .connect(MONGO_URI)
-  .then(() => {
-    console.log('Connected to MongoDB');
-    app.listen(PORT, () => console.log(`Book reader server running on http://localhost:${PORT}`));
-  })
-  .catch((err) => {
-    console.error('MongoDB connection error:', err.message);
-    process.exit(1);
-  });
+if (IS_SERVERLESS) {
+  // Vercel calls this exported app directly as a request handler — no app.listen().
+  module.exports = app;
+} else {
+  const PORT = process.env.PORT || 4000;
+  ensureMongo()
+    .then(() => {
+      app.listen(PORT, () => console.log(`Book reader server running on http://localhost:${PORT}`));
+    })
+    .catch((err) => {
+      console.error('MongoDB connection error:', err.message);
+      process.exit(1);
+    });
+}

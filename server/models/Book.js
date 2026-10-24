@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 const BookSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
-    fileName: { type: String, required: true }, // stored file name on disk
+    fileName: { type: String, default: '' }, // stored file name on local disk (local/dev)
+    fileUrl: { type: String, default: '' }, // Vercel Blob URL (production on Vercel)
     originalName: { type: String, required: true },
     fileType: { type: String, enum: ['pdf', 'epub'], required: true },
     fileSize: { type: Number, default: 0 },

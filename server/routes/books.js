@@ -9,21 +9,19 @@ const Annotation = require('../models/Annotation');
 const router = express.Router();
 
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(UPLOAD_DIR)) {
+  try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (_) { /* read-only FS on Vercel — fine, blob is used instead */ }
+}
+
+// On Vercel the filesystem is read-only/ephemeral, so uploaded files are stored
+// in Vercel Blob instead. Locally (no BLOB_READ_WRITE_TOKEN) they're kept on disk.
+const USE_BLOB = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 
 const PALETTE = ['#6C5CE7', '#00B894', '#0984E3', '#E17055', '#D63031', '#00CEC9', '#FDCB6E'];
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const unique = crypto.randomBytes(8).toString('hex');
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}-${unique}${ext}`);
-  }
-});
-
+// Always buffer in memory first — we decide where the bytes end up (disk vs blob) after.
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 200 * 1024 * 1024 }, // 200MB
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -60,10 +58,27 @@ router.post('/upload', upload.single('book'), async (req, res) => {
     const ext = path.extname(req.file.originalname).toLowerCase().replace('.', '');
     const title = (req.body.title && req.body.title.trim()) || path.basename(req.file.originalname, path.extname(req.file.originalname));
     const color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    const unique = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+
+    let fileName = '';
+    let fileUrl = '';
+
+    if (USE_BLOB) {
+      const { put } = require('@vercel/blob');
+      const blob = await put(unique, req.file.buffer, {
+        access: 'public',
+        contentType: req.file.mimetype || 'application/octet-stream'
+      });
+      fileUrl = blob.url;
+    } else {
+      fs.writeFileSync(path.join(UPLOAD_DIR, unique), req.file.buffer);
+      fileName = unique;
+    }
 
     const book = await Book.create({
       title,
-      fileName: req.file.filename,
+      fileName,
+      fileUrl,
       originalName: req.file.originalname,
       fileType: ext,
       fileSize: req.file.size,
@@ -81,6 +96,11 @@ router.get('/:id/file', async (req, res) => {
   try {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
+
+    if (book.fileUrl) {
+      return res.redirect(book.fileUrl);
+    }
+
     const filePath = path.join(UPLOAD_DIR, book.fileName);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File missing on disk' });
     res.sendFile(filePath);
@@ -112,8 +132,15 @@ router.delete('/:id', async (req, res) => {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
 
-    const filePath = path.join(UPLOAD_DIR, book.fileName);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (book.fileUrl && USE_BLOB) {
+      try {
+        const { del } = require('@vercel/blob');
+        await del(book.fileUrl);
+      } catch (_) { /* best effort */ }
+    } else if (book.fileName) {
+      const filePath = path.join(UPLOAD_DIR, book.fileName);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
 
     await Annotation.deleteMany({ bookId: book._id });
     await book.deleteOne();
