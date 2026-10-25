@@ -44,7 +44,7 @@ that's what makes the sync actually cross-device).
 
 ## How it works
 
-- **Upload** — PDF/EPUB files are stored in MongoDB (chunked, collection `bookchunks`) together with the book metadata.
+- **Upload** — PDF/EPUB files are stored in MongoDB Atlas (GridFS bucket `bookfiles`) and linked to the book document in `books` via `fileId`.
 - **Reading position** — every scroll is debounced and saved as `{ lastPage, lastScrollRatio }` on the
   `Book` document, so reopening a book resumes exactly there, on any device.
 - **Highlights** — selecting text captures the browser's selection rectangles, converts them to

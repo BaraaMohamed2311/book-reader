@@ -1,21 +1,42 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
+const mongoose = require('mongoose');
 const Book = require('../models/Book');
-const BookChunk = require('../models/BookChunk');
 const Annotation = require('../models/Annotation');
 
 const router = express.Router();
 
-// Book files live in MongoDB (collection "bookchunks"). The browser uploads them in pieces so
-// every request stays under Vercel's 4.5MB body limit.
+// Book files are stored in MongoDB Atlas via GridFS (bucket "bookfiles"), never on the server's disk.
+// The browser sends the file in 2MB pieces so every request stays under Vercel's 4.5MB body limit;
+// each piece is written straight into GridFS as chunk n of the file. The "books" document links to
+// the file through book.fileId and carries all the metadata.
+const BUCKET = 'bookfiles';
 const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
-const MAX_RANGE = 4 * 1024 * 1024; // never answer a single Range request with more than 4MB
-const LEGACY_UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const MAX_RANGE = 4 * 1024 * 1024; // never answer one Range request with more than 4MB
 
 const PALETTE = ['#6C5CE7', '#00B894', '#0984E3', '#E17055', '#D63031', '#00CEC9', '#FDCB6E'];
 const MIME = { pdf: 'application/pdf', epub: 'application/epub+zip' };
+
+const db = () => mongoose.connection.db;
+const filesColl = () => db().collection(`${BUCKET}.files`);
+const chunksColl = () => db().collection(`${BUCKET}.chunks`);
+const bucket = () => new mongoose.mongo.GridFSBucket(db(), { bucketName: BUCKET });
+
+let indexesReady = false;
+async function ensureChunkIndex() {
+  if (indexesReady) return;
+  await chunksColl().createIndex({ files_id: 1, n: 1 }, { unique: true });
+  indexesReady = true;
+}
+
+// Expected byte length of GridFS chunk `index` for a file of `size` bytes.
+const chunkLen = (size, cs, index) => Math.min(cs, size - index * cs);
+
+async function removeFile(book) {
+  if (!book.fileId) return;
+  await chunksColl().deleteMany({ files_id: book.fileId });
+  await filesColl().deleteOne({ _id: book.fileId });
+}
 
 // List all (finished) books
 router.get('/', async (req, res) => {
@@ -27,7 +48,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Step 1 of upload: create the book record
+// Step 1 of upload: create the book record (metadata) + its GridFS file entry
 router.post('/', async (req, res) => {
   try {
     const { title, originalName, fileType, fileSize } = req.body;
@@ -36,14 +57,29 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'originalName, fileType (pdf|epub) and fileSize are required' });
     }
     if (size > MAX_FILE_SIZE) return res.status(413).json({ error: 'File is larger than 200MB' });
+    await ensureChunkIndex();
+
+    const fileId = new mongoose.Types.ObjectId();
     const book = await Book.create({
       title: (title && title.trim()) || originalName.replace(/\.[^.]+$/, ''),
       originalName,
       fileType,
       fileSize: size,
+      mimeType: MIME[fileType],
+      fileId,
       chunkSize: CHUNK_SIZE,
       uploadComplete: false,
       coverColor: PALETTE[Math.floor(Math.random() * PALETTE.length)]
+    });
+    // GridFS file document (same layout GridFSBucket uses), linked back to the book.
+    await filesColl().insertOne({
+      _id: fileId,
+      length: size,
+      chunkSize: CHUNK_SIZE,
+      uploadDate: new Date(),
+      filename: originalName,
+      contentType: MIME[fileType],
+      metadata: { bookId: book._id, title: book.title, fileType, originalName }
     });
     res.status(201).json({ ...book.toObject(), chunkSize: CHUNK_SIZE });
   } catch (err) {
@@ -51,33 +87,38 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Step 2: upload one raw chunk (body = bytes). Safe to retry.
+// Step 2: upload one raw chunk (body = bytes) into GridFS. Safe to retry.
 router.put('/:id/chunks/:index', express.raw({ type: '*/*', limit: '4mb' }), async (req, res) => {
   try {
     const index = Number(req.params.index);
     const book = await Book.findById(req.params.id);
-    if (!book || book.uploadComplete) return res.status(404).json({ error: 'Upload not found' });
+    if (!book || book.uploadComplete || !book.fileId) return res.status(404).json({ error: 'Upload not found' });
     const expected = Math.ceil(book.fileSize / book.chunkSize);
     if (!Number.isInteger(index) || index < 0 || index >= expected) {
       return res.status(400).json({ error: 'Bad chunk index' });
     }
-    if (!Buffer.isBuffer(req.body) || !req.body.length) {
-      return res.status(400).json({ error: 'Empty chunk' });
+    if (!Buffer.isBuffer(req.body) || req.body.length !== chunkLen(book.fileSize, book.chunkSize, index)) {
+      return res.status(400).json({ error: 'Chunk has the wrong size' });
     }
-    await BookChunk.updateOne({ bookId: book._id, index }, { $set: { data: req.body } }, { upsert: true });
+    await ensureChunkIndex();
+    await chunksColl().updateOne(
+      { files_id: book.fileId, n: index },
+      { $set: { data: req.body } },
+      { upsert: true }
+    );
     res.json({ ok: true, index });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Step 3: verify all chunks arrived and publish the book
+// Step 3: verify the whole file is in Atlas, then publish the book
 router.post('/:id/complete', async (req, res) => {
   try {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const expected = Math.ceil(book.fileSize / book.chunkSize);
-    const stored = await BookChunk.countDocuments({ bookId: book._id });
+    const stored = await chunksColl().countDocuments({ files_id: book.fileId });
     if (stored !== expected) {
       return res.status(400).json({ error: `Upload incomplete (${stored}/${expected} chunks)` });
     }
@@ -100,32 +141,23 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Serve the book file from MongoDB, with HTTP Range support (PDF.js loads big PDFs piecewise,
+// Stream the book file out of GridFS with HTTP Range support (PDF.js loads big PDFs piecewise,
 // and each response stays small enough for Vercel).
 router.get('/:id/file', async (req, res) => {
   try {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
-
-    // Legacy books uploaded to local disk before files moved to MongoDB.
-    if (!book.chunkSize) {
-      const filePath = book.fileName ? path.join(LEGACY_UPLOAD_DIR, book.fileName) : '';
-      if (filePath && fs.existsSync(filePath)) return res.sendFile(filePath);
+    if (!book.fileId || !book.chunkSize) {
       return res.status(404).json({
-        error: 'This book was saved on the old disk storage and its file no longer exists on the server. Delete it and re-upload it (or run "npm run migrate-mongo" locally if you still have server/uploads).'
+        error: 'This book has no file stored in MongoDB (it was uploaded with the old storage). Delete it and upload it again, or run "npm run migrate-mongo" locally.'
       });
     }
-
-    // Upload never finished, or chunks are gone: tell the user plainly instead of a broken viewer.
-    const storedChunks = await BookChunk.countDocuments({ bookId: book._id });
-    if (storedChunks !== Math.ceil(book.fileSize / book.chunkSize)) {
-      return res.status(404).json({
-        error: 'This book\'s file is incomplete in the database. Delete it and upload it again.'
-      });
+    const stored = await chunksColl().countDocuments({ files_id: book.fileId });
+    if (stored !== Math.ceil(book.fileSize / book.chunkSize)) {
+      return res.status(404).json({ error: "This book's file is incomplete in the database. Delete it and upload it again." });
     }
 
     const total = book.fileSize;
-    const cs = book.chunkSize;
     let start = 0;
     let end = total - 1;
     let partial = false;
@@ -149,31 +181,20 @@ router.get('/:id/file', async (req, res) => {
     res.set({
       'Content-Type': MIME[book.fileType] || 'application/octet-stream',
       'Accept-Ranges': 'bytes',
-      'Cache-Control': 'private, max-age=3600'
+      'Cache-Control': 'private, max-age=3600',
+      'Content-Length': end - start + 1
     });
-
     if (partial) {
-      const first = Math.floor(start / cs);
-      const last = Math.floor(end / cs);
-      const chunks = await BookChunk.find({ bookId: book._id, index: { $gte: first, $lte: last } }).sort({ index: 1 });
-      const buf = Buffer.concat(chunks.map((c) => c.data));
-      const offset = start - first * cs;
-      res.status(206).set({
-        'Content-Range': `bytes ${start}-${end}/${total}`,
-        'Content-Length': end - start + 1
-      });
-      return res.end(buf.subarray(offset, offset + (end - start + 1)));
+      res.status(206).set('Content-Range', `bytes ${start}-${end}/${total}`);
     }
 
-    // No Range header: stream every chunk in order.
-    res.status(200).set('Content-Length', total);
-    const count = Math.ceil(total / cs);
-    for (let i = 0; i < count; i++) {
-      const c = await BookChunk.findOne({ bookId: book._id, index: i });
-      if (!c) { res.destroy(new Error('missing chunk')); return; }
-      res.write(c.data);
-    }
-    res.end();
+    // GridFS "end" is exclusive.
+    const stream = bucket().openDownloadStream(book.fileId, { start, end: end + 1 });
+    stream.on('error', (err) => {
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+      else res.destroy(err);
+    });
+    stream.pipe(res);
   } catch (err) {
     if (!res.headersSent) res.status(500).json({ error: err.message });
     else res.destroy(err);
@@ -197,13 +218,13 @@ router.put('/:id/progress', async (req, res) => {
   }
 });
 
-// Delete a book + its file chunks + its annotations
+// Delete a book + its GridFS file + its annotations
 router.delete('/:id', async (req, res) => {
   try {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
 
-    await BookChunk.deleteMany({ bookId: book._id });
+    await removeFile(book);
     await Annotation.deleteMany({ bookId: book._id });
     await book.deleteOne();
 
