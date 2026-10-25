@@ -15,6 +15,9 @@ if (!process.env.VERCEL) {
 const booksRouter = require('./routes/books');
 const annotationsRouter = require('./routes/annotations');
 const aiRouter = require('./routes/ai');
+const makeEntriesRouter = require('./routes/entries');
+const Vocab = require('./models/Vocab');
+const Quote = require('./models/Quote');
 
 const app = express();
 
@@ -64,6 +67,8 @@ app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next
 app.use('/api/books', booksRouter);
 app.use('/api/annotations', annotationsRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/vocab', makeEntriesRouter(Vocab));
+app.use('/api/quotes', makeEntriesRouter(Quote, ['author']));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 

@@ -17,6 +17,7 @@ const BookSchema = new mongoose.Schema(
     totalPages: { type: Number, default: 0 },
     lastPage: { type: Number, default: 1 },
     lastScrollRatio: { type: Number, default: 0 },
+    lastPageOffset: { type: Number, default: 0 }, // how far down the last page you were (0..1)
     lastReadAt: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }
   },

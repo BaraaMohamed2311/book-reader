@@ -38,6 +38,7 @@ async function init() {
 
   buildColorSwatches();
   wireToolbar();
+  wirePageJump();
   wireSelectionBubble();
   wireAiPanel();
 
@@ -121,6 +122,7 @@ async function openPdf() {
   readerLoading.remove();
 
   const totalPages = pdfDoc.numPages;
+  updatePageIndicator();
   if (!book.totalPages || book.totalPages !== totalPages) {
     fetch(`/api/books/${bookId}/progress`, {
       method: 'PUT',
@@ -133,7 +135,7 @@ async function openPdf() {
     await renderPdfPage(pageNum);
   }
 
-  setupScrollTracking(totalPages);
+  setupScrollTracking();
   restoreScrollPosition();
 }
 
@@ -189,6 +191,9 @@ async function renderPdfPage(pageNum) {
   wireTextSelection(pageNum, textLayer);
 
   await loadAnnotationsForPage(pageNum);
+
+  if (pendingJump === pageNum) jumpToPage(pageNum);
+  else if (pageNum === 1) updatePageIndicator();
 }
 
 function renderTextLayer(textContent, viewport, textLayer) {
@@ -211,7 +216,7 @@ function renderTextLayer(textContent, viewport, textLayer) {
 /* ---------------- Text selection -> highlight / AI ---------------- */
 
 function wireTextSelection(pageNum, textLayer) {
-  textLayer.addEventListener('mouseup', () => {
+  const onSelectEnd = () => {
     if (mode !== 'select') return;
     const sel = window.getSelection();
     const text = sel.toString().trim();
@@ -224,7 +229,9 @@ function wireTextSelection(pageNum, textLayer) {
     selectionBubble.style.display = 'flex';
     selectionBubble.style.left = Math.max(8, rect.left) + 'px';
     selectionBubble.style.top = Math.max(8, rect.top - 44) + 'px';
-  });
+  };
+  textLayer.addEventListener('mouseup', onSelectEnd);
+  textLayer.addEventListener('touchend', () => setTimeout(onSelectEnd, 50));
 }
 
 function wireSelectionBubble() {
@@ -463,42 +470,150 @@ async function loadAnnotationsForPage(pageNum) {
   repaintStrokes(pageNum);
 }
 
-/* ---------------- Scroll tracking / resume position ---------------- */
+/* ---------------- Current page, scroll tracking, jump, resume ---------------- */
 
-function setupScrollTracking(totalPages) {
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
-          currentVisiblePage = Number(entry.target.dataset.page);
-          scheduleSaveProgress();
-        }
-      });
-    },
-    { threshold: [0.5] }
-  );
-  Object.values(pageEls).forEach(({ wrap }) => observer.observe(wrap));
+let restoreDone = false;   // initial position restored (or nothing to restore)
+let userScrolled = false;  // the reader moved on their own before restore finished
+let pendingJump = null;    // page number requested before that page was rendered
+let rafPending = false;
+
+// The page that fills most of the visible reading area, plus how far down it the top edge of the
+// view is (0..1). Based on real on-screen geometry, so it works for tall pages on short screens.
+function measureCurrentPage() {
+  const bodyRect = readerBody.getBoundingClientRect();
+  let bestPage = null;
+  let bestOverlap = -1;
+  let offset = 0;
+  for (const key of Object.keys(pageEls)) {
+    const r = pageEls[key].wrap.getBoundingClientRect();
+    const overlap = Math.min(r.bottom, bodyRect.bottom) - Math.max(r.top, bodyRect.top);
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap;
+      bestPage = Number(key);
+      offset = r.height ? Math.min(1, Math.max(0, (bodyRect.top - r.top) / r.height)) : 0;
+    }
+  }
+  return bestPage ? { page: bestPage, offset } : null;
+}
+
+// Page to save / show. Until the saved position has been restored (or the reader scrolled), keep the
+// saved page so that opening and quickly leaving a book never resets your progress to page 1.
+function getCurrentPage() {
+  if (!restoreDone && !userScrolled) return { page: book.lastPage || 1, offset: book.lastPageOffset || 0 };
+  return measureCurrentPage() || { page: currentVisiblePage || 1, offset: 0 };
+}
+
+function updatePageIndicator() {
+  const input = document.getElementById('pageInput');
+  const total = document.getElementById('pageTotal');
+  if (total && pdfDoc) total.textContent = `/ ${pdfDoc.numPages}`;
+  if (input && document.activeElement !== input) input.value = currentVisiblePage;
+}
+
+function onScrollFrame() {
+  rafPending = false;
+  currentVisiblePage = getCurrentPage().page;
+  updatePageIndicator();
+  if (restoreDone || userScrolled) scheduleSaveProgress();
+}
+
+readerBody.addEventListener('scroll', () => {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(onScrollFrame);
+});
+['wheel', 'touchmove', 'keydown', 'pointerdown'].forEach((evt) =>
+  readerBody.addEventListener(evt, () => { userScrolled = true; }, { passive: true })
+);
+
+function setupScrollTracking() {
+  updatePageIndicator();
+}
+
+function progressPayload() {
+  const { page, offset } = getCurrentPage();
+  currentVisiblePage = page;
+  return { lastPage: page, lastPageOffset: offset };
 }
 
 function scheduleSaveProgress() {
   clearTimeout(saveProgressTimer);
   saveProgressTimer = setTimeout(() => {
-    const scrollRatio = readerBody.scrollTop / Math.max(1, readerBody.scrollHeight - readerBody.clientHeight);
     fetch(`/api/books/${bookId}/progress`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ lastPage: currentVisiblePage, lastScrollRatio: scrollRatio })
-    });
+      body: JSON.stringify(progressPayload()),
+      keepalive: true
+    }).catch(() => {});
   }, 600);
 }
 
-readerBody.addEventListener('scroll', scheduleSaveProgress);
+// Save when the tab is hidden or closed, too.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && book && pdfDoc && (restoreDone || userScrolled)) {
+    clearTimeout(saveProgressTimer);
+    fetch(`/api/books/${bookId}/progress`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(progressPayload()),
+      keepalive: true
+    }).catch(() => {});
+  }
+});
+
+function scrollToPage(pageNum, offset = 0) {
+  const target = pageEls[pageNum];
+  if (!target) return false;
+  const bodyRect = readerBody.getBoundingClientRect();
+  const r = target.wrap.getBoundingClientRect();
+  readerBody.scrollTop += (r.top - bodyRect.top) + offset * r.height;
+  currentVisiblePage = pageNum;
+  updatePageIndicator();
+  return true;
+}
 
 function restoreScrollPosition() {
-  const target = pageEls[book.lastPage];
-  if (target) {
-    target.wrap.scrollIntoView({ block: 'start' });
+  const urlPage = Number(params.get('page'));
+  const wanted = Number.isInteger(urlPage) && urlPage >= 1 ? urlPage : book.lastPage;
+  const offset = wanted === book.lastPage && !params.get('page') ? (book.lastPageOffset || 0) : 0;
+  if (!userScrolled || params.get('page')) scrollToPage(Math.min(wanted, pdfDoc.numPages), offset);
+  restoreDone = true;
+  currentVisiblePage = getCurrentPage().page;
+  updatePageIndicator();
+}
+
+// Jump to a page number typed by the reader. Pages render top to bottom, so if the page is not
+// rendered yet the jump is remembered and runs the moment that page appears.
+function jumpToPage(raw) {
+  const status = document.getElementById('jumpStatus');
+  const total = pdfDoc ? pdfDoc.numPages : 0;
+  const n = Math.floor(Number(raw));
+  if (!total) return;
+  if (!Number.isFinite(n) || n < 1 || n > total) {
+    status.textContent = `Enter 1–${total}`;
+    setTimeout(() => { status.textContent = ''; }, 2000);
+    return;
   }
+  userScrolled = true;
+  if (scrollToPage(n)) {
+    pendingJump = null;
+    status.textContent = '';
+    scheduleSaveProgress();
+  } else {
+    pendingJump = n;
+    status.textContent = `Loading page ${n}…`;
+  }
+}
+
+function wirePageJump() {
+  const input = document.getElementById('pageInput');
+  const go = document.getElementById('pageGo');
+  if (!input || !go) return;
+  go.addEventListener('click', () => jumpToPage(input.value));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { jumpToPage(input.value); input.blur(); }
+  });
+  input.addEventListener('focus', () => input.select());
 }
 
 /* ---------------- Simple EPUB fallback (text extraction, no pagination) ---------------- */
@@ -569,9 +684,8 @@ endReadingBtn.addEventListener('click', async () => {
   if (!book) return;
   endReadingBtn.disabled = true;
   clearTimeout(saveProgressTimer);
-  const stoppedAt = currentVisiblePage;
-  const scrollRatio = readerBody.scrollTop / Math.max(1, readerBody.scrollHeight - readerBody.clientHeight);
-  const body = { lastPage: stoppedAt, lastScrollRatio: scrollRatio };
+  const body = progressPayload(); // measured from what is on screen right now
+  const stoppedAt = body.lastPage;
   if (pdfDoc) body.totalPages = pdfDoc.numPages;
   endReadingBtn.textContent = 'Saving…';
   try {

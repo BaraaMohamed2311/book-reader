@@ -204,10 +204,11 @@ router.get('/:id/file', async (req, res) => {
 // Update reading progress (page + scroll ratio) and total page count
 router.put('/:id/progress', async (req, res) => {
   try {
-    const { lastPage, lastScrollRatio, totalPages } = req.body;
+    const { lastPage, lastScrollRatio, lastPageOffset, totalPages } = req.body;
     const update = { lastReadAt: new Date() };
     if (lastPage !== undefined) update.lastPage = lastPage;
     if (lastScrollRatio !== undefined) update.lastScrollRatio = lastScrollRatio;
+    if (lastPageOffset !== undefined) update.lastPageOffset = Math.min(1, Math.max(0, Number(lastPageOffset) || 0));
     if (totalPages !== undefined) update.totalPages = totalPages;
 
     const book = await Book.findByIdAndUpdate(req.params.id, update, { new: true });

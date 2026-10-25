@@ -14,6 +14,14 @@
         <div class="reader-title" id="readerTitle">Loading…</div>
       </div>
 
+      <div class="page-jump" id="pageJump">
+        <span class="page-jump-label">Page</span>
+        <input type="number" id="pageInput" min="1" value="1" inputmode="numeric" aria-label="Page number" />
+        <span id="pageTotal" class="page-jump-total">/ –</span>
+        <button class="btn btn-ghost btn-sm" id="pageGo" title="Jump to this page">Go</button>
+        <span id="jumpStatus" class="page-jump-status"></span>
+      </div>
+
       <div class="toolbar">
         <button class="btn btn-icon" id="toolSelect" title="Select / highlight text">✎</button>
         <button class="btn btn-icon" id="toolDraw" title="Draw / annotate">🖊</button>
@@ -22,6 +30,7 @@
         <button class="btn btn-icon" id="toolFullscreen" title="Fullscreen">⛶</button>
         <button class="btn btn-primary" id="endReading" title="Save where you stopped and go back to the library">End reading</button>
         <button class="btn btn-icon" id="toolAi" title="Ask AI about selection">🤖</button>
+        <button class="btn btn-icon" id="toolNote" title="Save a word, phrase or quote">📝</button>
       </div>
     </div>
 
@@ -33,6 +42,8 @@
   <div class="selection-bubble" id="selectionBubble" style="display:none;">
     <button id="bubbleHighlight">🖍 Highlight</button>
     <button id="bubbleAsk">🤖 Ask AI</button>
+    <button id="bubbleWord">📝 Word</button>
+    <button id="bubbleQuote">❝ Quote</button>
   </div>
 
   <div class="ai-panel" id="aiPanel">
@@ -50,10 +61,32 @@
     </div>
   </div>
 
+  <!-- Save word / phrase / quote -->
+  <div class="modal-overlay" id="noteOverlay" style="display:none;">
+    <div class="modal">
+      <h2>Save to your notes</h2>
+      <p class="hint">Paste or type text. It goes to the Words or Quotes page on your home screen, where you can add explanations later.</p>
+      <div class="seg" id="noteKind">
+        <button type="button" class="seg-btn active" data-kind="word">📝 Word / phrase</button>
+        <button type="button" class="seg-btn" data-kind="quote">❝ Quote</button>
+      </div>
+      <div class="field"><label>Text</label><textarea id="noteText" rows="3" placeholder="Paste or type here…"></textarea></div>
+      <div class="field"><label>Explanation (optional)</label><textarea id="noteExplanation" rows="2" placeholder="What does it mean? Why does it matter?"></textarea></div>
+      <div class="field" id="noteAuthorField" style="display:none;"><label>Author (optional)</label><input type="text" id="noteAuthor" /></div>
+      <div class="field"><label>Page</label><input type="number" id="notePage" min="0" /></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="noteCancel">Cancel</button>
+        <button class="btn btn-primary" id="noteSave">Save</button>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
   <script src="/vendor/pdf.min.js"></script>
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.js';
   </script>
   <script src="/js/reader.js"></script>
+  <script src="/js/reader-notes.js"></script>
 </body>
 </html>

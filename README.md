@@ -166,3 +166,10 @@ server/
 package.json              # deps for Vercel's root-level install
 vercel.json                # routes everything to api/index.js, bundles server/public/
 ```
+
+## Words, phrases & quotes
+
+- While reading, select text and tap **📝 Word** or **❝ Quote** (or press the 📝 toolbar button to paste/type your own).
+- They appear on the **Words** and **Quotes** pages on the home screen, saved in MongoDB (collections `vocabs` and `quotes`),
+  where you can write an explanation/note for each, edit, search, filter by book, or jump back to the page you saved it from.
+- Use the **Page** box in the reader's top bar to jump to a page. **End reading** saves the page that is on screen.

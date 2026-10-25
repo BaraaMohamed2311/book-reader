@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Quotes — Shelf</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body data-api="/api/quotes" data-kind="quote" data-author="1">
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span> Shelf</div>
+    <nav class="nav">
+      <a href="/" class="nav-link">📚 Library</a>
+      <a href="/vocab.html" class="nav-link">📝 Words</a>
+      <a href="/quotes.html" class="nav-link active">❝ Quotes</a>
+    </nav>
+    
+  </div>
+
+  <div class="library entries-page">
+    <div class="library-header">
+      <div>
+        <h1>Quotes</h1>
+        <p>Quotes you saved while reading, with your own notes on why they matter.</p>
+      </div>
+    </div>
+
+    <div class="entries-tools">
+      <input type="text" id="searchInput" placeholder="Search…" />
+      <select id="bookFilter"><option value="">All books</option></select>
+    </div>
+
+    <div class="entry-add">
+      <textarea id="addText" rows="2" placeholder="Add a quote…"></textarea>
+      <textarea id="addExplanation" rows="2" placeholder="Your note (optional)"></textarea>
+      <input type="text" id="addAuthor" placeholder="Author (optional)" />
+      <button class="btn btn-primary" id="addBtn">Add</button>
+    </div>
+
+    <div id="entryList" class="entry-list"></div>
+    <div id="emptyState" class="empty-state" style="display:none;">
+      <div class="big-icon">❝</div>
+      <div>No quotes yet. While reading, select text and tap “❝ Quote”.</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/js/entries.js"></script>
+</body>
+</html>
