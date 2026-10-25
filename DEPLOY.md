@@ -1,6 +1,6 @@
 # Deploy to Vercel
 
-## Root Directory: `server`
+## Root Directory: repo root (server/ also works)
 Everything Vercel needs (server.js, package.json, public/, .vercelignore) is inside `server/`.
 Deploying from the repo root fails, so don't use it.
 

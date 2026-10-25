@@ -2,21 +2,18 @@
   "name": "book-reader",
   "version": "1.0.0",
   "private": true,
-  "description": "Shelf \u2014 synced highlight/draw book reader (deployment root for Vercel)",
+  "description": "Shelf - synced highlight/draw book reader (deployment root for Vercel)",
   "scripts": {
-    "start": "node server/server.js"
+    "start": "node server/server.js",
+    "migrate-mongo": "node server/scripts/migrate-to-mongo.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "mongoose": "^8.5.1",
-    "multer": "^1.4.5-lts.1",
+    "axios": "^1.7.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "axios": "^1.7.2",
-    "@vercel/blob": "^0.27.0"
+    "express": "^4.19.2",
+    "mongoose": "^8.5.1"
   },
-  "engines": {
-    "node": "24.x"
-  },
+  "engines": { "node": "24.x" },
   "main": "index.js"
 }

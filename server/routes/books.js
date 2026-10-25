@@ -107,12 +107,20 @@ router.get('/:id/file', async (req, res) => {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
 
-    // Legacy books uploaded to local disk before files moved to MongoDB (local dev only).
+    // Legacy books uploaded to local disk before files moved to MongoDB.
     if (!book.chunkSize) {
       const filePath = book.fileName ? path.join(LEGACY_UPLOAD_DIR, book.fileName) : '';
       if (filePath && fs.existsSync(filePath)) return res.sendFile(filePath);
       return res.status(404).json({
-        error: 'This book was uploaded before files moved to MongoDB. Run "npm run migrate-mongo" locally, or delete it and re-upload.'
+        error: 'This book was saved on the old disk storage and its file no longer exists on the server. Delete it and re-upload it (or run "npm run migrate-mongo" locally if you still have server/uploads).'
+      });
+    }
+
+    // Upload never finished, or chunks are gone: tell the user plainly instead of a broken viewer.
+    const storedChunks = await BookChunk.countDocuments({ bookId: book._id });
+    if (storedChunks !== Math.ceil(book.fileSize / book.chunkSize)) {
+      return res.status(404).json({
+        error: 'This book\'s file is incomplete in the database. Delete it and upload it again.'
       });
     }
 
