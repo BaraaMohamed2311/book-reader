@@ -108,36 +108,47 @@ document.getElementById('confirmUploadBtn').addEventListener('click', async () =
   btn.textContent = 'Uploading…';
 
   try {
-    const cfg = await (await fetch('/api/books/config')).json();
     const ext = selectedFile.name.split('.').pop().toLowerCase();
-    let res;
-    if (cfg.blob) {
-      // Vercel: browser -> Vercel Blob directly (serverless body limit is 4.5MB)
-      const { upload } = await import('https://esm.sh/@vercel/blob@0.27.0/client');
-      const blob = await upload(selectedFile.name, selectedFile, {
-        access: 'public',
-        handleUploadUrl: '/api/books/blob-token',
-        contentType: ext === 'pdf' ? 'application/pdf' : 'application/epub+zip'
-      });
-      res = await fetch('/api/books', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: titleInput.value,
-          fileUrl: blob.url,
-          originalName: selectedFile.name,
-          fileType: ext,
-          fileSize: selectedFile.size
-        })
-      });
-    } else {
-      const formData = new FormData();
-      formData.append('book', selectedFile);
-      formData.append('title', titleInput.value);
-      res = await fetch('/api/books/upload', { method: 'POST', body: formData });
-    }
+    // 1) create the record
+    let res = await fetch('/api/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: titleInput.value,
+        originalName: selectedFile.name,
+        fileType: ext,
+        fileSize: selectedFile.size
+      })
+    });
     if (!res.ok) throw new Error((await res.json()).error || 'Upload failed');
-    const book = await res.json();
+    const created = await res.json();
+
+    try {
+      // 2) send the file to MongoDB (via the API) in small pieces
+      const cs = created.chunkSize;
+      const count = Math.ceil(selectedFile.size / cs);
+      for (let i = 0; i < count; i++) {
+        const piece = selectedFile.slice(i * cs, (i + 1) * cs);
+        let ok = false;
+        for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+          const r = await fetch(`/api/books/${created._id}/chunks/${i}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: piece
+          });
+          ok = r.ok;
+          if (!ok && attempt === 2) throw new Error((await r.json().catch(() => ({}))).error || 'Chunk upload failed');
+        }
+        btn.textContent = `Uploading… ${Math.round(((i + 1) / count) * 100)}%`;
+      }
+      // 3) finish
+      res = await fetch(`/api/books/${created._id}/complete`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).error || 'Upload failed');
+    } catch (err) {
+      fetch(`/api/books/${created._id}`, { method: 'DELETE' }).catch(() => {});
+      throw err;
+    }
+    const book = created;
     closeUpload();
     window.location.href = `/reader.html?id=${book._id}`;
   } catch (err) {

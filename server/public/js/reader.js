@@ -41,11 +41,23 @@ async function init() {
   wireSelectionBubble();
   wireAiPanel();
 
-  if (book.fileType === 'pdf') {
-    await openPdf();
-  } else {
-    readerLoading.textContent = 'EPUB support is basic in this build — rendering as plain text.';
-    await openEpubFallback();
+  try {
+    if (book.fileType === 'pdf') {
+      await openPdf();
+    } else {
+      readerLoading.textContent = 'EPUB support is basic in this build — rendering as plain text.';
+      await openEpubFallback();
+    }
+  } catch (err) {
+    let msg = err && err.message ? err.message : 'Could not open this book.';
+    try {
+      const r = await fetch(`/api/books/${bookId}/file`, { method: 'HEAD' });
+      if (r.status === 404) {
+        const j = await (await fetch(`/api/books/${bookId}/file`)).json();
+        msg = j.error || msg;
+      }
+    } catch (_) {}
+    if (readerLoading.isConnected) readerLoading.textContent = msg;
   }
 }
 

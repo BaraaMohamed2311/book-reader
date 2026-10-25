@@ -3,8 +3,9 @@ const mongoose = require('mongoose');
 const BookSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
-    fileName: { type: String, default: '' }, // stored file name on local disk (local/dev)
-    fileUrl: { type: String, default: '' }, // Vercel Blob URL (production on Vercel)
+    fileName: { type: String, default: '' }, // legacy: file name on local disk (old local uploads only)
+    chunkSize: { type: Number, default: 0 }, // bytes per BookChunk document (file lives in MongoDB)
+    uploadComplete: { type: Boolean, default: true }, // false while chunks are still being uploaded
     originalName: { type: String, required: true },
     fileType: { type: String, enum: ['pdf', 'epub'], required: true },
     fileSize: { type: Number, default: 0 },

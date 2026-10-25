@@ -1,86 +1,89 @@
 const express = require('express');
-const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const Book = require('../models/Book');
+const BookChunk = require('../models/BookChunk');
 const Annotation = require('../models/Annotation');
 
 const router = express.Router();
 
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (_) { /* read-only FS on Vercel — fine, blob is used instead */ }
-}
-
-// On Vercel the filesystem is read-only/ephemeral, so uploaded files are stored
-// in Vercel Blob instead. Locally (no BLOB_READ_WRITE_TOKEN) they're kept on disk.
-const USE_BLOB = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+// Book files live in MongoDB (collection "bookchunks"). The browser uploads them in pieces so
+// every request stays under Vercel's 4.5MB body limit.
+const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
+const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
+const MAX_RANGE = 4 * 1024 * 1024; // never answer a single Range request with more than 4MB
+const LEGACY_UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 
 const PALETTE = ['#6C5CE7', '#00B894', '#0984E3', '#E17055', '#D63031', '#00CEC9', '#FDCB6E'];
+const MIME = { pdf: 'application/pdf', epub: 'application/epub+zip' };
 
-// Always buffer in memory first — we decide where the bytes end up (disk vs blob) after.
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.pdf' || ext === '.epub') cb(null, true);
-    else cb(new Error('Only .pdf and .epub files are supported'));
-  }
-});
-
-// Tells the frontend which upload strategy to use.
-router.get('/config', (req, res) => res.json({ blob: USE_BLOB }));
-
-// Vercel functions reject request bodies > 4.5MB, so on Vercel the browser uploads the
-// file straight to Vercel Blob. This route only hands out the short-lived upload token.
-router.post('/blob-token', async (req, res) => {
-  if (!USE_BLOB) return res.status(400).json({ error: 'Blob storage is not configured' });
+// List all (finished) books
+router.get('/', async (req, res) => {
   try {
-    const { handleUpload } = require('@vercel/blob/client');
-    const json = await handleUpload({
-      body: req.body,
-      request: req,
-      onBeforeGenerateToken: async () => ({
-        allowedContentTypes: ['application/pdf', 'application/epub+zip', 'application/octet-stream'],
-        maximumSizeInBytes: 200 * 1024 * 1024,
-        addRandomSuffix: true
-      }),
-      onUploadCompleted: async () => {} // DB record is created by POST / below
-    });
-    res.json(json);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// Create the Book record for a file that was already uploaded to Blob by the browser.
-router.post('/', async (req, res) => {
-  try {
-    const { title, fileUrl, originalName, fileType, fileSize } = req.body;
-    if (!fileUrl || !originalName || !['pdf', 'epub'].includes(fileType)) {
-      return res.status(400).json({ error: 'fileUrl, originalName and fileType (pdf|epub) are required' });
-    }
-    const book = await Book.create({
-      title: (title && title.trim()) || originalName.replace(/\.[^.]+$/, ''),
-      fileUrl,
-      originalName,
-      fileType,
-      fileSize: Number(fileSize) || 0,
-      coverColor: PALETTE[Math.floor(Math.random() * PALETTE.length)]
-    });
-    res.status(201).json(book);
+    const books = await Book.find({ uploadComplete: { $ne: false } }).sort({ lastReadAt: -1 });
+    res.json(books);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// List all books
-router.get('/', async (req, res) => {
+// Step 1 of upload: create the book record
+router.post('/', async (req, res) => {
   try {
-    const books = await Book.find().sort({ lastReadAt: -1 });
-    res.json(books);
+    const { title, originalName, fileType, fileSize } = req.body;
+    const size = Number(fileSize);
+    if (!originalName || !['pdf', 'epub'].includes(fileType) || !size) {
+      return res.status(400).json({ error: 'originalName, fileType (pdf|epub) and fileSize are required' });
+    }
+    if (size > MAX_FILE_SIZE) return res.status(413).json({ error: 'File is larger than 200MB' });
+    const book = await Book.create({
+      title: (title && title.trim()) || originalName.replace(/\.[^.]+$/, ''),
+      originalName,
+      fileType,
+      fileSize: size,
+      chunkSize: CHUNK_SIZE,
+      uploadComplete: false,
+      coverColor: PALETTE[Math.floor(Math.random() * PALETTE.length)]
+    });
+    res.status(201).json({ ...book.toObject(), chunkSize: CHUNK_SIZE });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Step 2: upload one raw chunk (body = bytes). Safe to retry.
+router.put('/:id/chunks/:index', express.raw({ type: '*/*', limit: '4mb' }), async (req, res) => {
+  try {
+    const index = Number(req.params.index);
+    const book = await Book.findById(req.params.id);
+    if (!book || book.uploadComplete) return res.status(404).json({ error: 'Upload not found' });
+    const expected = Math.ceil(book.fileSize / book.chunkSize);
+    if (!Number.isInteger(index) || index < 0 || index >= expected) {
+      return res.status(400).json({ error: 'Bad chunk index' });
+    }
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+      return res.status(400).json({ error: 'Empty chunk' });
+    }
+    await BookChunk.updateOne({ bookId: book._id, index }, { $set: { data: req.body } }, { upsert: true });
+    res.json({ ok: true, index });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Step 3: verify all chunks arrived and publish the book
+router.post('/:id/complete', async (req, res) => {
+  try {
+    const book = await Book.findById(req.params.id);
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const expected = Math.ceil(book.fileSize / book.chunkSize);
+    const stored = await BookChunk.countDocuments({ bookId: book._id });
+    if (stored !== expected) {
+      return res.status(400).json({ error: `Upload incomplete (${stored}/${expected} chunks)` });
+    }
+    book.uploadComplete = true;
+    await book.save();
+    res.json(book);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -97,61 +100,75 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Upload a new book
-router.post('/upload', upload.single('book'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const ext = path.extname(req.file.originalname).toLowerCase().replace('.', '');
-    const title = (req.body.title && req.body.title.trim()) || path.basename(req.file.originalname, path.extname(req.file.originalname));
-    const color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
-    const unique = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
-
-    let fileName = '';
-    let fileUrl = '';
-
-    if (USE_BLOB) {
-      const { put } = require('@vercel/blob');
-      const blob = await put(unique, req.file.buffer, {
-        access: 'public',
-        contentType: req.file.mimetype || 'application/octet-stream'
-      });
-      fileUrl = blob.url;
-    } else {
-      fs.writeFileSync(path.join(UPLOAD_DIR, unique), req.file.buffer);
-      fileName = unique;
-    }
-
-    const book = await Book.create({
-      title,
-      fileName,
-      fileUrl,
-      originalName: req.file.originalname,
-      fileType: ext,
-      fileSize: req.file.size,
-      coverColor: color
-    });
-
-    res.status(201).json(book);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Stream the raw book file (used by PDF.js / epub.js on both pc and phone)
+// Serve the book file from MongoDB, with HTTP Range support (PDF.js loads big PDFs piecewise,
+// and each response stays small enough for Vercel).
 router.get('/:id/file', async (req, res) => {
   try {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
 
-    if (book.fileUrl) {
-      return res.redirect(book.fileUrl);
+    // Legacy books uploaded to local disk before files moved to MongoDB (local dev only).
+    if (!book.chunkSize) {
+      const filePath = book.fileName ? path.join(LEGACY_UPLOAD_DIR, book.fileName) : '';
+      if (filePath && fs.existsSync(filePath)) return res.sendFile(filePath);
+      return res.status(404).json({
+        error: 'This book was uploaded before files moved to MongoDB. Run "npm run migrate-mongo" locally, or delete it and re-upload.'
+      });
     }
 
-    const filePath = path.join(UPLOAD_DIR, book.fileName);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File missing on disk' });
-    res.sendFile(filePath);
+    const total = book.fileSize;
+    const cs = book.chunkSize;
+    let start = 0;
+    let end = total - 1;
+    let partial = false;
+
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (m && (m[1] !== '' || m[2] !== '')) {
+      partial = true;
+      if (m[1] === '') {
+        start = Math.max(0, total - Number(m[2]));
+      } else {
+        start = Number(m[1]);
+        if (m[2] !== '') end = Math.min(Number(m[2]), total - 1);
+      }
+      end = Math.min(end, start + MAX_RANGE - 1);
+      if (start >= total || start > end) {
+        res.set('Content-Range', `bytes */${total}`);
+        return res.status(416).end();
+      }
+    }
+
+    res.set({
+      'Content-Type': MIME[book.fileType] || 'application/octet-stream',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'private, max-age=3600'
+    });
+
+    if (partial) {
+      const first = Math.floor(start / cs);
+      const last = Math.floor(end / cs);
+      const chunks = await BookChunk.find({ bookId: book._id, index: { $gte: first, $lte: last } }).sort({ index: 1 });
+      const buf = Buffer.concat(chunks.map((c) => c.data));
+      const offset = start - first * cs;
+      res.status(206).set({
+        'Content-Range': `bytes ${start}-${end}/${total}`,
+        'Content-Length': end - start + 1
+      });
+      return res.end(buf.subarray(offset, offset + (end - start + 1)));
+    }
+
+    // No Range header: stream every chunk in order.
+    res.status(200).set('Content-Length', total);
+    const count = Math.ceil(total / cs);
+    for (let i = 0; i < count; i++) {
+      const c = await BookChunk.findOne({ bookId: book._id, index: i });
+      if (!c) { res.destroy(new Error('missing chunk')); return; }
+      res.write(c.data);
+    }
+    res.end();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+    else res.destroy(err);
   }
 });
 
@@ -172,22 +189,13 @@ router.put('/:id/progress', async (req, res) => {
   }
 });
 
-// Delete a book + its file + its annotations
+// Delete a book + its file chunks + its annotations
 router.delete('/:id', async (req, res) => {
   try {
     const book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
 
-    if (book.fileUrl && USE_BLOB) {
-      try {
-        const { del } = require('@vercel/blob');
-        await del(book.fileUrl);
-      } catch (_) { /* best effort */ }
-    } else if (book.fileName) {
-      const filePath = path.join(UPLOAD_DIR, book.fileName);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    }
-
+    await BookChunk.deleteMany({ bookId: book._id });
     await Annotation.deleteMany({ bookId: book._id });
     await book.deleteOne();
 
