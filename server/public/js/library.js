@@ -8,10 +8,19 @@ const titleInput = document.getElementById('titleInput');
 
 let selectedFile = null;
 
+// Books uploaded by the previous version are moved into GridFS inside Atlas (server-side, once).
+let legacyMigrationStarted = false;
+function migrateLegacyBooks() {
+  if (legacyMigrationStarted) return;
+  legacyMigrationStarted = true;
+  fetch('/api/books/migrate-legacy', { method: 'POST' }).catch(() => {});
+}
+
 async function loadBooks() {
   const res = await fetch('/api/books', { cache: 'no-store' });
   const books = await res.json();
   renderBooks(books);
+  migrateLegacyBooks();
 }
 
 function escapeHtml(str) {

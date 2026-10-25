@@ -32,6 +32,52 @@ async function ensureChunkIndex() {
 // Expected byte length of GridFS chunk `index` for a file of `size` bytes.
 const chunkLen = (size, cs, index) => Math.min(cs, size - index * cs);
 
+
+// Books uploaded by the previous version kept their bytes in a "bookchunks" collection (same 2MB
+// chunk layout). Move them into GridFS inside Atlas and link them with book.fileId. Safe to run
+// concurrently and to retry: the GridFS file id is the book's own id and every write is an upsert.
+const migrating = new Map();
+function migrateLegacy(book) {
+  const key = String(book._id);
+  if (!migrating.has(key)) {
+    migrating.set(key, doMigrateLegacy(book).finally(() => migrating.delete(key)));
+  }
+  return migrating.get(key);
+}
+
+async function doMigrateLegacy(book) {
+  if (book.fileId) return book;
+  if (!book.chunkSize || !book.fileSize) return null;
+  const legacy = db().collection('bookchunks');
+  const expected = Math.ceil(book.fileSize / book.chunkSize);
+  if ((await legacy.countDocuments({ bookId: book._id })) !== expected) return null;
+
+  await ensureChunkIndex();
+  const fileId = book._id;
+  for await (const c of legacy.find({ bookId: book._id }).sort({ index: 1 })) {
+    await chunksColl().updateOne({ files_id: fileId, n: c.index }, { $set: { data: c.data } }, { upsert: true });
+  }
+  if ((await chunksColl().countDocuments({ files_id: fileId })) !== expected) return null;
+
+  await filesColl().updateOne(
+    { _id: fileId },
+    {
+      $setOnInsert: {
+        length: book.fileSize,
+        chunkSize: book.chunkSize,
+        uploadDate: new Date(),
+        filename: book.originalName,
+        contentType: MIME[book.fileType],
+        metadata: { bookId: book._id, title: book.title, fileType: book.fileType, originalName: book.originalName }
+      }
+    },
+    { upsert: true }
+  );
+  await Book.updateOne({ _id: book._id }, { $set: { fileId, mimeType: MIME[book.fileType], uploadComplete: true } });
+  await legacy.deleteMany({ bookId: book._id }); // single copy of the file: GridFS only
+  return Book.findById(book._id);
+}
+
 async function removeFile(book) {
   if (!book.fileId) return;
   await chunksColl().deleteMany({ files_id: book.fileId });
@@ -130,6 +176,20 @@ router.post('/:id/complete', async (req, res) => {
   }
 });
 
+// Move every book uploaded by the previous version into GridFS (also happens automatically on open).
+router.post('/migrate-legacy', async (req, res) => {
+  try {
+    const todo = await Book.find({ fileId: null, chunkSize: { $gt: 0 } });
+    let migrated = 0;
+    for (const b of todo) {
+      if (await migrateLegacy(b)) migrated++;
+    }
+    res.json({ migrated, remaining: todo.length - migrated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get single book
 router.get('/:id', async (req, res) => {
   try {
@@ -145,12 +205,16 @@ router.get('/:id', async (req, res) => {
 // and each response stays small enough for Vercel).
 router.get('/:id/file', async (req, res) => {
   try {
-    const book = await Book.findById(req.params.id);
+    let book = await Book.findById(req.params.id);
     if (!book) return res.status(404).json({ error: 'Book not found' });
-    if (!book.fileId || !book.chunkSize) {
-      return res.status(404).json({
-        error: 'This book has no file stored in MongoDB (it was uploaded with the old storage). Delete it and upload it again, or run "npm run migrate-mongo" locally.'
-      });
+    if (!book.fileId) {
+      // Uploaded by the previous version: move it into GridFS now (inside Atlas), then serve it.
+      book = await migrateLegacy(book);
+      if (!book) {
+        return res.status(404).json({
+          error: 'The file for this book is not in MongoDB (its upload never finished, or it was saved on a server disk that no longer exists). Delete it and upload it again.'
+        });
+      }
     }
     const stored = await chunksColl().countDocuments({ files_id: book.fileId });
     if (stored !== Math.ceil(book.fileSize / book.chunkSize)) {
