@@ -108,9 +108,14 @@ function setMode(newMode) {
     }
   }
 
+  const textToolArmed = newMode === 'highlight' || newMode === 'ai' || newMode === 'note';
   Object.values(pageEls).forEach(({ drawCanvas, textLayer }) => {
     drawCanvas.style.pointerEvents = (newMode === 'draw' || newMode === 'erase') ? 'auto' : 'none';
-    textLayer.style.pointerEvents = (newMode === 'highlight' || newMode === 'ai' || newMode === 'note') ? 'auto' : 'none';
+    textLayer.style.pointerEvents = textToolArmed ? 'auto' : 'none';
+    // 'none' only while armed, so a drag over text acts on it instead of
+    // scrolling the page; 'auto' the rest of the time so plain scrolling
+    // and pinch-zoom work everywhere, including right over the text.
+    textLayer.style.touchAction = textToolArmed ? 'none' : 'auto';
   });
 }
 
@@ -211,6 +216,13 @@ async function renderPdfPage(pageNum) {
   textLayer.className = 'text-layer';
   textLayer.style.width = viewport.width + 'px';
   textLayer.style.height = viewport.height + 'px';
+  // Match whatever tool is armed right now (pages render one at a time while
+  // the reader can already be interacting), same as drawCanvas below — the
+  // CSS default covers the common case, but don't rely on it if a text tool
+  // happens to already be armed while a later page is still rendering in.
+  const textToolAlreadyArmed = mode === 'highlight' || mode === 'ai' || mode === 'note';
+  textLayer.style.pointerEvents = textToolAlreadyArmed ? 'auto' : 'none';
+  textLayer.style.touchAction = textToolAlreadyArmed ? 'none' : 'auto';
 
   const annoLayer = document.createElement('div');
   annoLayer.className = 'annotation-layer';

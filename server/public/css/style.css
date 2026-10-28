@@ -378,11 +378,23 @@ a { color: inherit; text-decoration: none; }
   /* The tools act on text via drag (see reader.js's pointer-based span
      drag), never via the browser's own text selection — this keeps the
      OS's native copy/select-all/web-search bar from ever appearing, on any
-     device, in any tool mode. touch-action: none stops a drag that starts
-     on a span from also trying to scroll the page. */
+     device, in any tool mode. */
   user-select: none;
   -webkit-user-select: none;
-  touch-action: none;
+  /* Both of these are also set/toggled from JS in setMode() for pages that
+     already exist, but every newly rendered page needs a correct default
+     the instant it's created too — defaulting pointer-events to its CSS
+     initial value of 'auto' is what let a brand new page's invisible,
+     full-page text layer swallow every touch (scroll AND pinch-zoom)
+     everywhere on it, even with no text tool armed. */
+  pointer-events: none;
+  /* touch-action is set dynamically in reader.js's setMode(), but defaults
+     to auto here too — some mobile browsers still apply an element's
+     touch-action to a touch that starts on it even when pointer-events:
+     none would otherwise pass the touch through. Only 'none' while a text
+     tool is actually armed, so a drag there acts on the text instead of
+     scrolling the page. */
+  touch-action: auto;
 }
 .page-wrap .text-layer span { position: absolute; white-space: pre; cursor: inherit; }
 
