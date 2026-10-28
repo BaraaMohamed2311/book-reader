@@ -221,9 +221,38 @@ function renderTextLayer(textContent, viewport, textLayer) {
 // so anchoring to the bottom of the screen avoids fighting with it.
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
+// Mobile browsers (Android Chrome especially) pop up their own copy/select-all/
+// web-search action bar based on where the *native* selection sits — moving our
+// own buttons around does nothing to stop that, since it's driven by the OS,
+// not by our markup. The only reliable fix is to clear the native selection
+// right after we've captured what we need from it, which dismisses the native
+// bar; we then draw our own lightweight highlight box so the user still sees
+// what they selected while our bottom bar is up.
+let mobilePreviewEls = [];
+function clearMobileSelectionPreview() {
+  mobilePreviewEls.forEach((el) => el.remove());
+  mobilePreviewEls = [];
+}
+function showMobileSelectionPreview(pageNum, range) {
+  clearMobileSelectionPreview();
+  const { annoLayer, wrap } = pageEls[pageNum];
+  const wrapRect = wrap.getBoundingClientRect();
+  Array.from(range.getClientRects()).forEach((r) => {
+    const box = document.createElement('div');
+    box.className = 'selection-preview-box';
+    box.style.left = (r.left - wrapRect.left) + 'px';
+    box.style.top = (r.top - wrapRect.top) + 'px';
+    box.style.width = r.width + 'px';
+    box.style.height = r.height + 'px';
+    annoLayer.appendChild(box);
+    mobilePreviewEls.push(box);
+  });
+}
+
 function hideSelectionBubble() {
   selectionBubble.style.display = 'none';
   selectionBubble.classList.remove('mobile');
+  clearMobileSelectionPreview();
 }
 
 function wireTextSelection(pageNum, textLayer) {
@@ -242,6 +271,11 @@ function wireTextSelection(pageNum, textLayer) {
       selectionBubble.classList.add('mobile');
       selectionBubble.style.left = '';
       selectionBubble.style.top = '';
+      showMobileSelectionPreview(pageNum, range);
+      // Let the browser finish whatever it was about to do with the
+      // selection (handles/magnifier), then clear it so the native
+      // action bar disappears and stops covering our own toolbar.
+      requestAnimationFrame(() => sel.removeAllRanges());
     } else {
       selectionBubble.classList.remove('mobile');
       const rect = range.getBoundingClientRect();
