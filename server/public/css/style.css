@@ -361,7 +361,12 @@ a { color: inherit; text-decoration: none; }
   margin: 0 auto 18px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.5);
   background: white;
+  /* Safety net: even if the JS-computed render scale is ever off, never let
+     a page be wider than its container (and clip would be worse than
+     shrinking it down via object-fit on the canvas below). */
+  max-width: 100%;
 }
+.page-wrap canvas.pdf-canvas { max-width: 100%; height: auto; }
 
 .page-wrap canvas.pdf-canvas { display: block; }
 .page-wrap .text-layer {

@@ -139,9 +139,25 @@ async function openPdf() {
   restoreScrollPosition();
 }
 
+const BASE_PDF_SCALE = 1.4;
+
+// On phones a page rendered at the desktop scale is wider than the screen.
+// .reader-body clips overflow-x instead of scrolling it, so the right edge
+// of every page was getting silently cut off. Fit the scale to the actual
+// available width instead (capped at the normal desktop scale) so the whole
+// page is visible and nothing needs to scroll sideways.
+function pdfScaleFor(baseViewport) {
+  const horizontalPadding = 24; // matches .reader-body's 12px left/right padding
+  const available = readerBody.clientWidth - horizontalPadding;
+  if (available <= 0) return BASE_PDF_SCALE;
+  const fitScale = available / baseViewport.width;
+  return Math.min(BASE_PDF_SCALE, fitScale);
+}
+
 async function renderPdfPage(pageNum) {
   const page = await pdfDoc.getPage(pageNum);
-  const viewport = page.getViewport({ scale: 1.4 });
+  const baseViewport = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: pdfScaleFor(baseViewport) });
 
   const wrap = document.createElement('div');
   wrap.className = 'page-wrap';
@@ -262,7 +278,9 @@ function wireTextSelection(pageNum, textLayer) {
     const text = sel.toString().trim();
     if (!text) { hideSelectionBubble(); return; }
 
-    const range = sel.getRangeAt(0);
+    // Clone the range: once we clear the live selection below, sel.getRangeAt(0)
+    // would no longer be valid, but a cloned Range keeps working independently.
+    const range = sel.getRangeAt(0).cloneRange();
     pendingSelectionRange = { pageNum, range, text };
 
     selectionBubble.style.display = 'flex';
@@ -272,10 +290,10 @@ function wireTextSelection(pageNum, textLayer) {
       selectionBubble.style.left = '';
       selectionBubble.style.top = '';
       showMobileSelectionPreview(pageNum, range);
-      // Let the browser finish whatever it was about to do with the
-      // selection (handles/magnifier), then clear it so the native
-      // action bar disappears and stops covering our own toolbar.
-      requestAnimationFrame(() => sel.removeAllRanges());
+      // Clear the native selection immediately (not deferred) so Chrome's own
+      // copy/select-all/web-search bar is dismissed right away instead of
+      // lingering on screen over our own toolbar.
+      sel.removeAllRanges();
     } else {
       selectionBubble.classList.remove('mobile');
       const rect = range.getBoundingClientRect();
