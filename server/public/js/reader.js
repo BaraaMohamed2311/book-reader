@@ -215,20 +215,39 @@ function renderTextLayer(textContent, viewport, textLayer) {
 
 /* ---------------- Text selection -> highlight / AI ---------------- */
 
+// Touch devices (phones/tablets) get a bottom toolbar instead of a bubble that
+// floats next to the selection — on Android especially, the OS's own
+// selection toolbar/magnifier renders right on top of a floating bubble,
+// so anchoring to the bottom of the screen avoids fighting with it.
+const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+
+function hideSelectionBubble() {
+  selectionBubble.style.display = 'none';
+  selectionBubble.classList.remove('mobile');
+}
+
 function wireTextSelection(pageNum, textLayer) {
   const onSelectEnd = () => {
     if (mode !== 'select') return;
     const sel = window.getSelection();
     const text = sel.toString().trim();
-    if (!text) { selectionBubble.style.display = 'none'; return; }
+    if (!text) { hideSelectionBubble(); return; }
 
     const range = sel.getRangeAt(0);
     pendingSelectionRange = { pageNum, range, text };
 
-    const rect = range.getBoundingClientRect();
     selectionBubble.style.display = 'flex';
-    selectionBubble.style.left = Math.max(8, rect.left) + 'px';
-    selectionBubble.style.top = Math.max(8, rect.top - 44) + 'px';
+    if (isTouchDevice) {
+      // Anchored to the bottom of the viewport via CSS; no inline position needed.
+      selectionBubble.classList.add('mobile');
+      selectionBubble.style.left = '';
+      selectionBubble.style.top = '';
+    } else {
+      selectionBubble.classList.remove('mobile');
+      const rect = range.getBoundingClientRect();
+      selectionBubble.style.left = Math.max(8, rect.left) + 'px';
+      selectionBubble.style.top = Math.max(8, rect.top - 44) + 'px';
+    }
   };
   textLayer.addEventListener('mouseup', onSelectEnd);
   textLayer.addEventListener('touchend', () => setTimeout(onSelectEnd, 50));
@@ -237,16 +256,18 @@ function wireTextSelection(pageNum, textLayer) {
 function wireSelectionBubble() {
   document.getElementById('bubbleHighlight').addEventListener('click', () => {
     if (pendingSelectionRange) saveHighlightFromSelection(pendingSelectionRange);
-    selectionBubble.style.display = 'none';
+    hideSelectionBubble();
     window.getSelection().removeAllRanges();
   });
   document.getElementById('bubbleAsk').addEventListener('click', () => {
     if (pendingSelectionRange) openAiPanel(pendingSelectionRange.text);
-    selectionBubble.style.display = 'none';
+    hideSelectionBubble();
   });
-  document.addEventListener('mousedown', (e) => {
-    if (!selectionBubble.contains(e.target)) selectionBubble.style.display = 'none';
-  });
+  const dismissIfOutside = (e) => {
+    if (!selectionBubble.contains(e.target)) hideSelectionBubble();
+  };
+  document.addEventListener('mousedown', dismissIfOutside);
+  document.addEventListener('touchstart', dismissIfOutside, { passive: true });
 }
 
 async function saveHighlightFromSelection({ pageNum, range, text }) {

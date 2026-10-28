@@ -20,6 +20,9 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* Belt-and-suspenders: never let a too-wide flex row push the whole page
+     into horizontal scroll on small screens. */
+  overflow-x: hidden;
 }
 
 a { color: inherit; text-decoration: none; }
@@ -35,7 +38,12 @@ a { color: inherit; text-decoration: none; }
   position: sticky;
   top: 0;
   z-index: 20;
+  gap: 10px;
 }
+/* Flex items default to min-width:auto, which is what lets a row of
+   nav links refuse to shrink and force the whole bar into horizontal
+   overflow — min-width:0 lets them shrink/wrap/scroll instead. */
+.topbar > * { min-width: 0; }
 
 .brand {
   display: flex;
@@ -304,6 +312,7 @@ a { color: inherit; text-decoration: none; }
   gap: 12px;
   flex-wrap: wrap;
 }
+.reader-topbar > * { min-width: 0; }
 .reader-topbar .reader-title {
   font-size: 14px;
   font-weight: 600;
@@ -317,8 +326,14 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
+.toolbar::-webkit-scrollbar { display: none; }
+.toolbar > * { flex: 0 0 auto; }
 
 .color-swatch {
   width: 22px;
@@ -411,6 +426,29 @@ a { color: inherit; text-decoration: none; }
 }
 .selection-bubble button:hover { background: var(--bg-soft); }
 
+/* On touch devices the bubble docks to the bottom of the screen instead of
+   floating next to the selection, so it doesn't collide with the browser's
+   own selection toolbar/magnifier. */
+.selection-bubble.mobile {
+  left: 0 !important;
+  right: 0;
+  top: auto !important;
+  bottom: 0;
+  width: 100%;
+  justify-content: space-around;
+  gap: 2px;
+  padding: 8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  border-radius: 16px 16px 0 0;
+  border-width: 1px 0 0 0;
+  box-shadow: 0 -8px 24px rgba(0,0,0,0.45);
+}
+.selection-bubble.mobile button {
+  flex: 1;
+  text-align: center;
+  padding: 12px 6px;
+  font-size: 13px;
+}
+
 /* AI panel */
 .ai-panel {
   position: fixed;
@@ -497,21 +535,38 @@ a { color: inherit; text-decoration: none; }
 
 @media (max-width: 640px) {
   .reader-topbar .reader-title { max-width: 120px; }
-  .toolbar { gap: 4px; }
+  .toolbar { gap: 4px; flex-basis: 100%; order: 3; }
+  .page-jump { order: 2; }
   .ai-panel { width: 100vw; }
 }
 
 /* ---------- Home navigation ---------- */
-.nav { display: flex; gap: 6px; }
+.nav {
+  display: flex;
+  gap: 6px;
+  /* If the row still doesn't fit (narrow phones), scroll within the nav
+     itself instead of overflowing the page. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.nav::-webkit-scrollbar { display: none; }
 .nav-link {
   padding: 8px 14px; border-radius: 999px; font-size: 14px; color: var(--text-dim);
   border: 1px solid transparent;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .nav-link:hover { color: var(--text); }
 .nav-link.active { color: var(--text); background: var(--accent-soft); border-color: var(--accent); }
 @media (max-width: 640px) {
   .topbar { flex-wrap: wrap; gap: 10px; padding: 12px 16px; }
   .nav-link { padding: 6px 10px; font-size: 13px; }
+}
+@media (max-width: 420px) {
+  .topbar { justify-content: flex-start; }
+  .brand { order: 1; }
+  .nav { order: 3; flex-basis: 100%; }
+  #openUploadBtn { order: 2; margin-left: auto; }
 }
 
 /* ---------- Words / Quotes pages ---------- */

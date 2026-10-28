@@ -28,7 +28,7 @@ async function saveEntry(kind, fields) {
 // One-click save from the selection bubble.
 async function saveSelection(kind) {
   const sel = pendingSelectionRange;
-  selectionBubble.style.display = 'none';
+  hideSelectionBubble();
   if (!sel || !sel.text) return;
   try {
     await saveEntry(kind, { text: sel.text, page: sel.pageNum });
