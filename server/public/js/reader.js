@@ -177,6 +177,17 @@ function pdfScaleFor(baseViewport) {
   return Math.min(BASE_PDF_SCALE, fitScale);
 }
 
+// Canvases are bitmaps: sizing one's width/height attribute to the page's
+// CSS (logical) pixel size only looks sharp on old 1x screens. On a normal
+// phone (devicePixelRatio 2-3) that leaves far fewer bitmap pixels than the
+// screen can actually show, so text renders fuzzy — worse the smaller the
+// fitted CSS size gets. Render the bitmap at devicePixelRatio instead, and
+// keep the element's on-page (CSS) size at the logical viewport size via
+// canvas.style.width/height, so layout is unaffected and only sharpness
+// changes. Capped at 2x: beyond that the gain is imperceptible but the
+// memory cost (the whole book is rendered up front) is not.
+const OUTPUT_SCALE = Math.min(window.devicePixelRatio || 1, 2);
+
 async function renderPdfPage(pageNum) {
   const page = await pdfDoc.getPage(pageNum);
   const baseViewport = page.getViewport({ scale: 1 });
@@ -190,8 +201,10 @@ async function renderPdfPage(pageNum) {
 
   const canvas = document.createElement('canvas');
   canvas.className = 'pdf-canvas';
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  canvas.width = Math.ceil(viewport.width * OUTPUT_SCALE);
+  canvas.height = Math.ceil(viewport.height * OUTPUT_SCALE);
+  canvas.style.width = viewport.width + 'px';
+  canvas.style.height = viewport.height + 'px';
   const ctx = canvas.getContext('2d');
 
   const textLayer = document.createElement('div');
@@ -202,11 +215,17 @@ async function renderPdfPage(pageNum) {
   const annoLayer = document.createElement('div');
   annoLayer.className = 'annotation-layer';
 
+  // Drawing (pen) also gets a sharp backing store; a context-level scale
+  // keeps all the existing draw/erase math (which works in logical,
+  // viewport.width-relative units) correct without touching it.
   const drawCanvas = document.createElement('canvas');
   drawCanvas.className = 'draw-canvas';
-  drawCanvas.width = viewport.width;
-  drawCanvas.height = viewport.height;
+  drawCanvas.width = Math.ceil(viewport.width * OUTPUT_SCALE);
+  drawCanvas.height = Math.ceil(viewport.height * OUTPUT_SCALE);
+  drawCanvas.style.width = viewport.width + 'px';
+  drawCanvas.style.height = viewport.height + 'px';
   drawCanvas.style.pointerEvents = 'none';
+  drawCanvas.getContext('2d').scale(OUTPUT_SCALE, OUTPUT_SCALE);
 
   const badge = document.createElement('div');
   badge.className = 'page-number-badge';
@@ -221,7 +240,8 @@ async function renderPdfPage(pageNum) {
 
   pageEls[pageNum] = { wrap, canvas, textLayer, annoLayer, drawCanvas, viewport };
 
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  const renderTransform = OUTPUT_SCALE !== 1 ? [OUTPUT_SCALE, 0, 0, OUTPUT_SCALE, 0, 0] : undefined;
+  await page.render({ canvasContext: ctx, viewport, transform: renderTransform }).promise;
 
   const textContent = await page.getTextContent();
   renderTextLayer(textContent, viewport, textLayer);
