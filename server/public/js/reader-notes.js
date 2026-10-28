@@ -1,5 +1,6 @@
 // Saving words/phrases and quotes from inside the reader. Uses globals from reader.js
-// (bookId, pendingSelectionRange, currentSelectionText, clearPendingSelection, getCurrentPage).
+// (bookId). The modal is opened by reader.js, via openNoteModalWithSelection, once the
+// reader has dragged over some text while the 📝 Note tool is armed.
 
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
@@ -25,9 +26,9 @@ async function saveEntry(kind, fields) {
   return data;
 }
 
-// Manual add modal (paste or type) — also how a selection gets saved as a
-// word or quote now: tap 📝 Note in the top toolbar with text selected, the
-// selection is prefilled, review/add an explanation, then save.
+// Modal to review/edit a dragged-over passage before saving it as a word or
+// quote (reader.js calls openNoteModalWithSelection once a drag over text
+// finishes while the Note tool is armed).
 const noteOverlay = document.getElementById('noteOverlay');
 const noteText = document.getElementById('noteText');
 const noteExplanation = document.getElementById('noteExplanation');
@@ -42,23 +43,19 @@ function setNoteKind(kind) {
 }
 document.querySelectorAll('#noteKind .seg-btn').forEach((b) => b.addEventListener('click', () => setNoteKind(b.dataset.kind)));
 
-function openNoteModal() {
-  const selected = (typeof currentSelectionText === 'function' ? currentSelectionText() : '').replace(/\s+/g, ' ').trim();
-  noteText.value = selected;
+function openNoteModalWithSelection(text, page) {
+  noteText.value = (text || '').replace(/\s+/g, ' ').trim();
   noteExplanation.value = '';
   noteAuthor.value = '';
-  notePage.value = (pendingSelectionRange && pendingSelectionRange.pageNum)
-    || (typeof getCurrentPage === 'function' ? getCurrentPage().page : '');
+  notePage.value = page || (typeof getCurrentPage === 'function' ? getCurrentPage().page : '');
   setNoteKind(noteKind);
   noteOverlay.style.display = 'flex';
   noteText.focus();
 }
 function closeNoteModal() {
   noteOverlay.style.display = 'none';
-  if (typeof clearPendingSelection === 'function') clearPendingSelection();
 }
 
-document.getElementById('toolNote').addEventListener('click', openNoteModal);
 document.getElementById('noteCancel').addEventListener('click', closeNoteModal);
 noteOverlay.addEventListener('click', (e) => { if (e.target === noteOverlay) closeNoteModal(); });
 

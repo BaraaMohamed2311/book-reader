@@ -373,10 +373,18 @@ a { color: inherit; text-decoration: none; }
   position: absolute;
   top: 0; left: 0;
   overflow: hidden;
-  opacity: 0.001; /* invisible but selectable */
+  opacity: 0.001; /* invisible but hit-testable */
   line-height: 1;
+  /* The tools act on text via drag (see reader.js's pointer-based span
+     drag), never via the browser's own text selection — this keeps the
+     OS's native copy/select-all/web-search bar from ever appearing, on any
+     device, in any tool mode. touch-action: none stops a drag that starts
+     on a span from also trying to scroll the page. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
-.page-wrap .text-layer span { position: absolute; white-space: pre; cursor: text; }
+.page-wrap .text-layer span { position: absolute; white-space: pre; cursor: inherit; }
 
 .page-wrap .annotation-layer {
   position: absolute;
@@ -407,16 +415,27 @@ a { color: inherit; text-decoration: none; }
   font-size: 14px;
 }
 
-/* Stand-in for the native blue selection highlight, drawn after we clear the
-   real selection (see reader.js) so the native action bar goes away. The
-   actual actions (highlight / ask AI / note) live in the top toolbar now —
-   select text, then tap a tool, no separate menu. */
+/* Live preview of what's under a drag while a text tool (Highlight / Ask AI
+   / Note) is armed — there is no native text selection involved at all, so
+   nothing ever competes with the browser's own selection UI. */
 .selection-preview-box {
   position: absolute;
   background: var(--accent);
   opacity: 0.35;
   border-radius: 2px;
   pointer-events: none;
+}
+
+/* Thin strip telling the reader which tool is armed and how to use it, and
+   that tapping the tool again returns to plain reading/scrolling. Hidden
+   while no tool is active. */
+.mode-hint {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 6px 10px;
 }
 
 /* AI panel */

@@ -23,17 +23,18 @@
       </div>
 
       <div class="toolbar">
-        <button class="btn btn-icon" id="toolSelect" title="Select / highlight text">✎</button>
-        <button class="btn btn-icon" id="toolDraw" title="Draw / annotate">🖊</button>
+        <button class="btn btn-icon" id="toolHighlight" data-tool="highlight" title="Highlight: drag over text to highlight it">🖍</button>
+        <button class="btn btn-icon" id="toolDraw" data-tool="draw" title="Draw: drag anywhere on the page">🖊</button>
         <span id="colorSwatches" style="display:flex; gap:6px; align-items:center; margin:0 4px;"></span>
-        <button class="btn btn-icon" id="toolErase" title="Eraser (click a highlight or drawing)">⌫</button>
+        <button class="btn btn-icon" id="toolErase" data-tool="erase" title="Eraser: drag over a highlight or drawing to remove it">⌫</button>
+        <button class="btn btn-icon" id="toolAi" data-tool="ai" title="Ask AI: drag over text to ask about it">🤖</button>
+        <button class="btn btn-icon" id="toolNote" data-tool="note" title="Save word/quote: drag over text to save it">📝</button>
         <button class="btn btn-icon" id="toolFullscreen" title="Fullscreen">⛶</button>
         <button class="btn btn-primary" id="endReading" title="Save where you stopped and go back to the library">End reading</button>
-        <button class="btn btn-icon" id="toolHighlight" title="Highlight the selected text">🖍</button>
-        <button class="btn btn-icon" id="toolAi" title="Ask AI about selection">🤖</button>
-        <button class="btn btn-icon" id="toolNote" title="Save a word, phrase or quote">📝</button>
       </div>
     </div>
+
+    <div class="mode-hint" id="modeHint" style="display:none;"></div>
 
     <div class="reader-body" id="readerBody">
       <div class="reader-loading" id="readerLoading">Opening book…</div>

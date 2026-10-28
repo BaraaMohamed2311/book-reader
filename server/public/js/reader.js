@@ -11,13 +11,19 @@ const aiAnswerArea = document.getElementById('aiAnswerArea');
 const HIGHLIGHT_COLORS = ['#FFD400', '#2ECC40', '#1E90FF', '#FF2D95', '#FF3B30'];
 const ERASE_RADIUS_PX = 14; // hit-test radius, in on-screen page pixels
 let activeColor = HIGHLIGHT_COLORS[0];
-let mode = 'select'; // 'select' | 'draw' | 'erase'
+// 'read' is the default: nothing is armed, the page behaves like a normal
+// scrollable/zoomable document. Arming a tool (tapping it) switches into
+// 'draw' | 'erase' | 'highlight' | 'ai' | 'note' — in any of those, dragging
+// a finger/pointer over the page acts immediately (paints a stroke, erases
+// what's under it, highlights the text dragged over, asks the AI about it,
+// or saves it as a word/quote). Tapping the same tool again drops back to
+// 'read'.
+let mode = 'read';
 let book = null;
 let pdfDoc = null;
 let pageEls = {}; // page number -> { wrap, canvas, textLayer, annoLayer, drawCanvas, viewport }
 let saveProgressTimer = null;
 let currentVisiblePage = 1;
-let pendingSelectionRange = null;
 
 init();
 
@@ -38,7 +44,6 @@ async function init() {
   buildColorSwatches();
   wireToolbar();
   wirePageJump();
-  wireSelectionDismiss();
   wireAiPanel();
 
   try {
@@ -76,29 +81,51 @@ function buildColorSwatches() {
   });
 }
 
-function wireToolbar() {
-  const selectBtn = document.getElementById('toolSelect');
-  const drawBtn = document.getElementById('toolDraw');
-  const eraseBtn = document.getElementById('toolErase');
-  const fsBtn = document.getElementById('toolFullscreen');
-  const highlightBtn = document.getElementById('toolHighlight');
-  const aiBtn = document.getElementById('toolAi');
+const MODE_HINTS = {
+  draw: 'Draw mode — drag anywhere on the page to draw. Tap 🖊 again to stop.',
+  erase: 'Eraser mode — drag over a highlight or drawing to remove it. Tap ⌫ again to stop.',
+  highlight: 'Highlight mode — drag over text to highlight it. Tap 🖍 again to stop.',
+  ai: 'Ask AI mode — drag over text to ask about it. Tap 🤖 again to stop.',
+  note: 'Save mode — drag over text to save it as a word or quote. Tap 📝 again to stop.'
+};
 
-  function setMode(newMode) {
-    mode = newMode;
-    [selectBtn, drawBtn, eraseBtn].forEach((b) => b.classList.remove('active'));
-    if (newMode === 'select') selectBtn.classList.add('active');
-    if (newMode === 'draw') drawBtn.classList.add('active');
-    if (newMode === 'erase') eraseBtn.classList.add('active');
-    Object.values(pageEls).forEach(({ drawCanvas, textLayer }) => {
-      drawCanvas.style.pointerEvents = newMode === 'draw' || newMode === 'erase' ? 'auto' : 'none';
-      textLayer.style.pointerEvents = newMode === 'select' ? 'auto' : 'none';
-    });
+function setMode(newMode) {
+  // Abandon any drag in progress on the tool being switched away from.
+  endDrag(false);
+  mode = newMode;
+
+  document.querySelectorAll('.toolbar .btn-icon[data-tool]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tool === newMode);
+  });
+
+  const hint = document.getElementById('modeHint');
+  if (hint) {
+    if (MODE_HINTS[newMode]) {
+      hint.textContent = MODE_HINTS[newMode];
+      hint.style.display = 'block';
+    } else {
+      hint.style.display = 'none';
+    }
   }
-  selectBtn.addEventListener('click', () => setMode('select'));
-  drawBtn.addEventListener('click', () => setMode('draw'));
-  eraseBtn.addEventListener('click', () => setMode(mode === 'erase' ? 'select' : 'erase'));
-  setMode('select');
+
+  Object.values(pageEls).forEach(({ drawCanvas, textLayer }) => {
+    drawCanvas.style.pointerEvents = (newMode === 'draw' || newMode === 'erase') ? 'auto' : 'none';
+    textLayer.style.pointerEvents = (newMode === 'highlight' || newMode === 'ai' || newMode === 'note') ? 'auto' : 'none';
+  });
+}
+
+function wireToolbar() {
+  const fsBtn = document.getElementById('toolFullscreen');
+
+  // Every tool button behaves the same way: tapping it arms that tool
+  // (exclusively — arming one disarms any other), tapping the same one
+  // again drops back to plain reading. Draw/Erase already worked this way;
+  // Highlight/Ask AI/Note now do too, via drag (wired in wireSpanDrag).
+  document.querySelectorAll('.toolbar .btn-icon[data-tool]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setMode(mode === btn.dataset.tool ? 'read' : btn.dataset.tool);
+    });
+  });
 
   fsBtn.addEventListener('click', () => {
     const root = document.getElementById('readerRoot');
@@ -106,29 +133,7 @@ function wireToolbar() {
     else document.exitFullscreen();
   });
 
-  // Both read the currently selected text from the top toolbar, so "select
-  // text, then tap a tool" works directly — no separate floating/side menu
-  // needed, and nothing to collide with the browser's own selection UI.
-  highlightBtn.addEventListener('click', () => {
-    if (pendingSelectionRange) saveHighlightFromSelection(pendingSelectionRange);
-    clearPendingSelection();
-    window.getSelection().removeAllRanges();
-  });
-
-  aiBtn.addEventListener('click', () => {
-    const text = currentSelectionText();
-    openAiPanel(text);
-  });
-}
-
-// On touch devices we clear the native selection as soon as it's made (see
-// wireTextSelection below) to dismiss the browser's own action bar, so by
-// the time a toolbar button is tapped window.getSelection() is already
-// empty — pendingSelectionRange is what still holds the text/range. On
-// desktop the native selection is left alone, so fall back to it too.
-function currentSelectionText() {
-  if (pendingSelectionRange) return pendingSelectionRange.text;
-  return window.getSelection().toString().trim();
+  setMode('read');
 }
 
 /* ---------------- PDF rendering ---------------- */
@@ -222,7 +227,7 @@ async function renderPdfPage(pageNum) {
   renderTextLayer(textContent, viewport, textLayer);
 
   wireDrawCanvas(pageNum, drawCanvas, viewport);
-  wireTextSelection(pageNum, textLayer);
+  wireSpanDrag(pageNum, textLayer);
 
   await loadAnnotationsForPage(pageNum);
 
@@ -247,29 +252,39 @@ function renderTextLayer(textContent, viewport, textLayer) {
   });
 }
 
-/* ---------------- Text selection -> highlight / AI ---------------- */
+/* ---------------- Text tools (Highlight / Ask AI / Note) via drag ---------------- */
 
-// No floating or side menu anymore: the tools already live in the top
-// toolbar (Highlight / Ask AI / Note), so selecting text just has to make
-// that text available to whichever button gets tapped next.
-const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+// There is no floating or side menu, and no browser text selection involved
+// at all: while Highlight, Ask AI or Note is armed, dragging a finger/mouse
+// over the text layer picks up whichever word spans it passes over (via
+// elementFromPoint, not window.getSelection()) and the matching action runs
+// the moment the drag ends. Because the native selection is never touched,
+// the OS's own copy/select-all/web-search bar never has a reason to appear.
+let activeDrag = null; // { pageNum, spans, startIndex, currentIndex, previewEls }
 
-// Mobile browsers (Android Chrome especially) pop up their own copy/select-all/
-// web-search action bar based on where the *native* selection sits, and that
-// bar can land right over the top toolbar. The only reliable way to dismiss
-// it is to clear the native selection right after capturing what we need
-// from it; we then draw our own lightweight highlight box so the user still
-// sees what they selected while they reach for a toolbar button.
-let mobilePreviewEls = [];
-function clearMobileSelectionPreview() {
-  mobilePreviewEls.forEach((el) => el.remove());
-  mobilePreviewEls = [];
+function textLayerSpans(pageNum) {
+  return Array.from(pageEls[pageNum].textLayer.children);
 }
-function showMobileSelectionPreview(pageNum, range) {
-  clearMobileSelectionPreview();
-  const { annoLayer, wrap } = pageEls[pageNum];
+
+function spanIndexAtPoint(pageNum, clientX, clientY) {
+  const { textLayer } = pageEls[pageNum];
+  const el = document.elementFromPoint(clientX, clientY);
+  const span = el && el.closest ? el.closest('span') : null;
+  if (!span || span.parentElement !== textLayer) return -1;
+  return Array.from(textLayer.children).indexOf(span);
+}
+
+function renderActiveDragPreview() {
+  if (!activeDrag) return;
+  const { pageNum, spans, startIndex, currentIndex, previewEls } = activeDrag;
+  previewEls.forEach((el) => el.remove());
+  activeDrag.previewEls = [];
+  const { wrap, annoLayer } = pageEls[pageNum];
   const wrapRect = wrap.getBoundingClientRect();
-  Array.from(range.getClientRects()).forEach((r) => {
+  const lo = Math.min(startIndex, currentIndex);
+  const hi = Math.max(startIndex, currentIndex);
+  for (let i = lo; i <= hi; i++) {
+    const r = spans[i].getBoundingClientRect();
     const box = document.createElement('div');
     box.className = 'selection-preview-box';
     box.style.left = (r.left - wrapRect.left) + 'px';
@@ -277,66 +292,86 @@ function showMobileSelectionPreview(pageNum, range) {
     box.style.width = r.width + 'px';
     box.style.height = r.height + 'px';
     annoLayer.appendChild(box);
-    mobilePreviewEls.push(box);
+    activeDrag.previewEls.push(box);
+  }
+}
+
+function clearActiveDragPreview() {
+  if (!activeDrag) return;
+  activeDrag.previewEls.forEach((el) => el.remove());
+  activeDrag.previewEls = [];
+}
+
+// Text + per-span rects (same {x,y,w,h} ratio format the annotation API and
+// drawHighlight already use) for whatever the current drag spans.
+function activeDragSelection() {
+  if (!activeDrag) return null;
+  const { pageNum, spans, startIndex, currentIndex } = activeDrag;
+  const lo = Math.min(startIndex, currentIndex);
+  const hi = Math.max(startIndex, currentIndex);
+  const picked = spans.slice(lo, hi + 1);
+  const text = picked.map((s) => s.textContent).join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+
+  const { wrap, viewport } = pageEls[pageNum];
+  const wrapRect = wrap.getBoundingClientRect();
+  const rects = picked.map((s) => {
+    const r = s.getBoundingClientRect();
+    return {
+      x: (r.left - wrapRect.left) / viewport.width,
+      y: (r.top - wrapRect.top) / viewport.height,
+      w: r.width / viewport.width,
+      h: r.height / viewport.height
+    };
+  });
+  return { pageNum, text, rects };
+}
+
+function onDragMove(e) {
+  if (!activeDrag) return;
+  e.preventDefault();
+  const idx = spanIndexAtPoint(activeDrag.pageNum, e.clientX, e.clientY);
+  if (idx === -1) return;
+  activeDrag.currentIndex = idx;
+  renderActiveDragPreview();
+}
+
+function onDragUp() { endDrag(true); }
+function onDragCancel() { endDrag(false); }
+
+function endDrag(commit) {
+  if (!activeDrag) return;
+  document.removeEventListener('pointermove', onDragMove);
+  const finishedMode = mode;
+  const picked = commit ? activeDragSelection() : null;
+  clearActiveDragPreview();
+  activeDrag = null;
+  if (!picked) return;
+
+  if (finishedMode === 'highlight') {
+    saveHighlightFromSpans(picked);
+  } else if (finishedMode === 'ai') {
+    openAiPanel(picked.text);
+  } else if (finishedMode === 'note' && typeof openNoteModalWithSelection === 'function') {
+    openNoteModalWithSelection(picked.text, picked.pageNum);
+  }
+}
+
+function wireSpanDrag(pageNum, textLayer) {
+  textLayer.addEventListener('pointerdown', (e) => {
+    if (mode !== 'highlight' && mode !== 'ai' && mode !== 'note') return;
+    const idx = spanIndexAtPoint(pageNum, e.clientX, e.clientY);
+    if (idx === -1) return;
+    e.preventDefault();
+    activeDrag = { pageNum, spans: textLayerSpans(pageNum), startIndex: idx, currentIndex: idx, previewEls: [] };
+    renderActiveDragPreview();
+    document.addEventListener('pointermove', onDragMove);
+    document.addEventListener('pointerup', onDragUp, { once: true });
+    document.addEventListener('pointercancel', onDragCancel, { once: true });
   });
 }
 
-function clearPendingSelection() {
-  pendingSelectionRange = null;
-  clearMobileSelectionPreview();
-}
-
-function wireTextSelection(pageNum, textLayer) {
-  const onSelectEnd = () => {
-    if (mode !== 'select') return;
-    const sel = window.getSelection();
-    const text = sel.toString().trim();
-    if (!text) { clearPendingSelection(); return; }
-
-    // Clone the range: once we clear the live selection below, sel.getRangeAt(0)
-    // would no longer be valid, but a cloned Range keeps working independently.
-    const range = sel.getRangeAt(0).cloneRange();
-    pendingSelectionRange = { pageNum, range, text };
-
-    if (isTouchDevice) {
-      showMobileSelectionPreview(pageNum, range);
-      // Clear the native selection immediately (not deferred) so Chrome's own
-      // copy/select-all/web-search bar is dismissed right away instead of
-      // lingering on screen over the top toolbar.
-      sel.removeAllRanges();
-    }
-    // On desktop we leave the native selection alone — its own highlight is
-    // visible feedback enough, and there's no action bar to fight with.
-  };
-  textLayer.addEventListener('mouseup', onSelectEnd);
-  textLayer.addEventListener('touchend', () => setTimeout(onSelectEnd, 50));
-}
-
-// Tapping/clicking anywhere outside the toolbar drops the pending selection,
-// so a stale selection can't get attached to the next unrelated tap. Taps
-// that start a new selection on the text layer just get overwritten by
-// onSelectEnd right after, so clearing here first is harmless.
-function wireSelectionDismiss() {
-  const toolbarEl = document.querySelector('.toolbar');
-  const dismissIfOutside = (e) => {
-    if (!toolbarEl.contains(e.target)) clearPendingSelection();
-  };
-  document.addEventListener('mousedown', dismissIfOutside);
-  document.addEventListener('touchstart', dismissIfOutside, { passive: true });
-}
-
-async function saveHighlightFromSelection({ pageNum, range, text }) {
-  const { viewport, wrap } = pageEls[pageNum];
-  const wrapRect = wrap.getBoundingClientRect();
-  const clientRects = Array.from(range.getClientRects());
-
-  const rects = clientRects.map((r) => ({
-    x: (r.left - wrapRect.left) / viewport.width,
-    y: (r.top - wrapRect.top) / viewport.height,
-    w: r.width / viewport.width,
-    h: r.height / viewport.height
-  }));
-
+async function saveHighlightFromSpans({ pageNum, text, rects }) {
   const res = await fetch('/api/annotations', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
