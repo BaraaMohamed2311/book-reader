@@ -4,7 +4,6 @@ const bookId = params.get('id');
 const readerBody = document.getElementById('readerBody');
 const readerLoading = document.getElementById('readerLoading');
 const readerTitle = document.getElementById('readerTitle');
-const selectionBubble = document.getElementById('selectionBubble');
 const aiPanel = document.getElementById('aiPanel');
 const aiSourceText = document.getElementById('aiSourceText');
 const aiAnswerArea = document.getElementById('aiAnswerArea');
@@ -39,7 +38,7 @@ async function init() {
   buildColorSwatches();
   wireToolbar();
   wirePageJump();
-  wireSelectionBubble();
+  wireSelectionDismiss();
   wireAiPanel();
 
   try {
@@ -82,6 +81,7 @@ function wireToolbar() {
   const drawBtn = document.getElementById('toolDraw');
   const eraseBtn = document.getElementById('toolErase');
   const fsBtn = document.getElementById('toolFullscreen');
+  const highlightBtn = document.getElementById('toolHighlight');
   const aiBtn = document.getElementById('toolAi');
 
   function setMode(newMode) {
@@ -106,11 +106,29 @@ function wireToolbar() {
     else document.exitFullscreen();
   });
 
-  aiBtn.addEventListener('click', () => {
-    const sel = window.getSelection().toString().trim();
-    if (sel) openAiPanel(sel);
-    else openAiPanel('');
+  // Both read the currently selected text from the top toolbar, so "select
+  // text, then tap a tool" works directly — no separate floating/side menu
+  // needed, and nothing to collide with the browser's own selection UI.
+  highlightBtn.addEventListener('click', () => {
+    if (pendingSelectionRange) saveHighlightFromSelection(pendingSelectionRange);
+    clearPendingSelection();
+    window.getSelection().removeAllRanges();
   });
+
+  aiBtn.addEventListener('click', () => {
+    const text = currentSelectionText();
+    openAiPanel(text);
+  });
+}
+
+// On touch devices we clear the native selection as soon as it's made (see
+// wireTextSelection below) to dismiss the browser's own action bar, so by
+// the time a toolbar button is tapped window.getSelection() is already
+// empty — pendingSelectionRange is what still holds the text/range. On
+// desktop the native selection is left alone, so fall back to it too.
+function currentSelectionText() {
+  if (pendingSelectionRange) return pendingSelectionRange.text;
+  return window.getSelection().toString().trim();
 }
 
 /* ---------------- PDF rendering ---------------- */
@@ -231,19 +249,17 @@ function renderTextLayer(textContent, viewport, textLayer) {
 
 /* ---------------- Text selection -> highlight / AI ---------------- */
 
-// Touch devices (phones/tablets) get a bottom toolbar instead of a bubble that
-// floats next to the selection — on Android especially, the OS's own
-// selection toolbar/magnifier renders right on top of a floating bubble,
-// so anchoring to the bottom of the screen avoids fighting with it.
+// No floating or side menu anymore: the tools already live in the top
+// toolbar (Highlight / Ask AI / Note), so selecting text just has to make
+// that text available to whichever button gets tapped next.
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
 // Mobile browsers (Android Chrome especially) pop up their own copy/select-all/
-// web-search action bar based on where the *native* selection sits — moving our
-// own buttons around does nothing to stop that, since it's driven by the OS,
-// not by our markup. The only reliable fix is to clear the native selection
-// right after we've captured what we need from it, which dismisses the native
-// bar; we then draw our own lightweight highlight box so the user still sees
-// what they selected while our bottom bar is up.
+// web-search action bar based on where the *native* selection sits, and that
+// bar can land right over the top toolbar. The only reliable way to dismiss
+// it is to clear the native selection right after capturing what we need
+// from it; we then draw our own lightweight highlight box so the user still
+// sees what they selected while they reach for a toolbar button.
 let mobilePreviewEls = [];
 function clearMobileSelectionPreview() {
   mobilePreviewEls.forEach((el) => el.remove());
@@ -265,9 +281,8 @@ function showMobileSelectionPreview(pageNum, range) {
   });
 }
 
-function hideSelectionBubble() {
-  selectionBubble.style.display = 'none';
-  selectionBubble.classList.remove('mobile');
+function clearPendingSelection() {
+  pendingSelectionRange = null;
   clearMobileSelectionPreview();
 }
 
@@ -276,47 +291,35 @@ function wireTextSelection(pageNum, textLayer) {
     if (mode !== 'select') return;
     const sel = window.getSelection();
     const text = sel.toString().trim();
-    if (!text) { hideSelectionBubble(); return; }
+    if (!text) { clearPendingSelection(); return; }
 
     // Clone the range: once we clear the live selection below, sel.getRangeAt(0)
     // would no longer be valid, but a cloned Range keeps working independently.
     const range = sel.getRangeAt(0).cloneRange();
     pendingSelectionRange = { pageNum, range, text };
 
-    selectionBubble.style.display = 'flex';
     if (isTouchDevice) {
-      // Anchored to the bottom of the viewport via CSS; no inline position needed.
-      selectionBubble.classList.add('mobile');
-      selectionBubble.style.left = '';
-      selectionBubble.style.top = '';
       showMobileSelectionPreview(pageNum, range);
       // Clear the native selection immediately (not deferred) so Chrome's own
       // copy/select-all/web-search bar is dismissed right away instead of
-      // lingering on screen over our own toolbar.
+      // lingering on screen over the top toolbar.
       sel.removeAllRanges();
-    } else {
-      selectionBubble.classList.remove('mobile');
-      const rect = range.getBoundingClientRect();
-      selectionBubble.style.left = Math.max(8, rect.left) + 'px';
-      selectionBubble.style.top = Math.max(8, rect.top - 44) + 'px';
     }
+    // On desktop we leave the native selection alone — its own highlight is
+    // visible feedback enough, and there's no action bar to fight with.
   };
   textLayer.addEventListener('mouseup', onSelectEnd);
   textLayer.addEventListener('touchend', () => setTimeout(onSelectEnd, 50));
 }
 
-function wireSelectionBubble() {
-  document.getElementById('bubbleHighlight').addEventListener('click', () => {
-    if (pendingSelectionRange) saveHighlightFromSelection(pendingSelectionRange);
-    hideSelectionBubble();
-    window.getSelection().removeAllRanges();
-  });
-  document.getElementById('bubbleAsk').addEventListener('click', () => {
-    if (pendingSelectionRange) openAiPanel(pendingSelectionRange.text);
-    hideSelectionBubble();
-  });
+// Tapping/clicking anywhere outside the toolbar drops the pending selection,
+// so a stale selection can't get attached to the next unrelated tap. Taps
+// that start a new selection on the text layer just get overwritten by
+// onSelectEnd right after, so clearing here first is harmless.
+function wireSelectionDismiss() {
+  const toolbarEl = document.querySelector('.toolbar');
   const dismissIfOutside = (e) => {
-    if (!selectionBubble.contains(e.target)) hideSelectionBubble();
+    if (!toolbarEl.contains(e.target)) clearPendingSelection();
   };
   document.addEventListener('mousedown', dismissIfOutside);
   document.addEventListener('touchstart', dismissIfOutside, { passive: true });

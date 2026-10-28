@@ -407,62 +407,10 @@ a { color: inherit; text-decoration: none; }
   font-size: 14px;
 }
 
-/* floating selection bubble */
-.selection-bubble {
-  position: fixed;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--shadow);
-  padding: 6px;
-  display: flex;
-  gap: 4px;
-  z-index: 200;
-}
-.selection-bubble button {
-  background: transparent;
-  border: none;
-  color: var(--text);
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12.5px;
-  white-space: nowrap;
-}
-.selection-bubble button:hover { background: var(--bg-soft); }
-
-/* On touch devices the bubble docks to the right edge of the screen instead
-   of floating next to the selection or sitting at the bottom — bottom
-   collided with on-screen keyboards and thumb position, and the top is
-   where the browser's own selection toolbar renders. A side rail stays out
-   of both. */
-.selection-bubble.mobile {
-  left: auto !important;
-  right: 0;
-  top: 50% !important;
-  bottom: auto;
-  transform: translateY(-50%);
-  width: auto;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-  padding: 10px max(8px, env(safe-area-inset-right)) 10px 10px;
-  border-radius: 14px 0 0 14px;
-  border-width: 1px 0 1px 1px;
-  box-shadow: -8px 0 24px rgba(0,0,0,0.45);
-}
-.selection-bubble.mobile button {
-  flex: 0 0 auto;
-  width: 64px;
-  text-align: center;
-  padding: 10px 4px;
-  font-size: 11.5px;
-  line-height: 1.25;
-  white-space: normal;
-}
-
 /* Stand-in for the native blue selection highlight, drawn after we clear the
-   real selection (see reader.js) so the native action bar goes away. */
+   real selection (see reader.js) so the native action bar goes away. The
+   actual actions (highlight / ask AI / note) live in the top toolbar now —
+   select text, then tap a tool, no separate menu. */
 .selection-preview-box {
   position: absolute;
   background: var(--accent);

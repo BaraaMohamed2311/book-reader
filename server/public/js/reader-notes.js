@@ -1,5 +1,5 @@
 // Saving words/phrases and quotes from inside the reader. Uses globals from reader.js
-// (bookId, pendingSelectionRange, getCurrentPage, selectionBubble).
+// (bookId, pendingSelectionRange, currentSelectionText, clearPendingSelection, getCurrentPage).
 
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
@@ -25,23 +25,9 @@ async function saveEntry(kind, fields) {
   return data;
 }
 
-// One-click save from the selection bubble.
-async function saveSelection(kind) {
-  const sel = pendingSelectionRange;
-  hideSelectionBubble();
-  if (!sel || !sel.text) return;
-  try {
-    await saveEntry(kind, { text: sel.text, page: sel.pageNum });
-    window.getSelection().removeAllRanges();
-    toast(`Saved to ${LABEL[kind]} · page ${sel.pageNum}`);
-  } catch (err) {
-    toast(err.message, true);
-  }
-}
-document.getElementById('bubbleWord').addEventListener('click', () => saveSelection('word'));
-document.getElementById('bubbleQuote').addEventListener('click', () => saveSelection('quote'));
-
-// Manual add modal (paste or type).
+// Manual add modal (paste or type) — also how a selection gets saved as a
+// word or quote now: tap 📝 Note in the top toolbar with text selected, the
+// selection is prefilled, review/add an explanation, then save.
 const noteOverlay = document.getElementById('noteOverlay');
 const noteText = document.getElementById('noteText');
 const noteExplanation = document.getElementById('noteExplanation');
@@ -57,16 +43,20 @@ function setNoteKind(kind) {
 document.querySelectorAll('#noteKind .seg-btn').forEach((b) => b.addEventListener('click', () => setNoteKind(b.dataset.kind)));
 
 function openNoteModal() {
-  const selected = window.getSelection().toString().replace(/\s+/g, ' ').trim();
-  noteText.value = selected || (pendingSelectionRange && pendingSelectionRange.text) || '';
+  const selected = (typeof currentSelectionText === 'function' ? currentSelectionText() : '').replace(/\s+/g, ' ').trim();
+  noteText.value = selected;
   noteExplanation.value = '';
   noteAuthor.value = '';
-  notePage.value = typeof getCurrentPage === 'function' ? getCurrentPage().page : '';
+  notePage.value = (pendingSelectionRange && pendingSelectionRange.pageNum)
+    || (typeof getCurrentPage === 'function' ? getCurrentPage().page : '');
   setNoteKind(noteKind);
   noteOverlay.style.display = 'flex';
   noteText.focus();
 }
-function closeNoteModal() { noteOverlay.style.display = 'none'; }
+function closeNoteModal() {
+  noteOverlay.style.display = 'none';
+  if (typeof clearPendingSelection === 'function') clearPendingSelection();
+}
 
 document.getElementById('toolNote').addEventListener('click', openNoteModal);
 document.getElementById('noteCancel').addEventListener('click', closeNoteModal);
