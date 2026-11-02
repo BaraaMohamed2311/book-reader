@@ -1,26 +1,132 @@
-# Shelf — synced highlight/draw book reader
+# 📚✨ Shelf — Read Anywhere, Never Lose Your Place
 
-Self-hosted PDF/EPUB reader: upload books, read them full-screen on PC or phone,
-highlight text, draw/annotate freehand, and resume exactly where you left off —
-because everything is saved to MongoDB, not a single browser.
+> *Because the best reading habit is the one that follows you everywhere.*
 
-Also includes an "Ask AI" panel: select text you don't understand and it's explained
-in very simple, non-analogy language, using the apmix.ai Anthropic-compatible API.
+## The Story
 
-## 1. Install
+I wanted to read more. Not "someday", but every day: on the bus, in bed, at my desk, in five spare minutes between things.
 
-```bash
-cd server
-npm install
+The problem was never the books. It was the **friction**:
+
+- I'd highlight a passage on my PC, then open the same PDF on my phone and **none of it was there**.
+- I'd draw a note in the margin, then lose it the moment I switched devices.
+- I'd read until page 143, close the laptop, and later spend five minutes **hunting for where I stopped**.
+- Keeping two copies of a PDF in sync by hand? Nobody sticks to that. And when reading is a chore, reading stops.
+
+So I built **Shelf**: a self-hosted reader where I upload a book **once** and read it from **any device, any time**. Highlights, freehand drawings, notes and reading progress are all saved to the cloud, so I pick up **exactly where I left off**, with everything I marked, no manual syncing, no copying files around.
+
+And since I don't always understand everything I read, there's an **Ask AI** panel: select a confusing passage and it explains it in plain, simple language, no analogies.
+
+## What It Does
+
+| Page | What you get |
+|---|---|
+| **Library** | Upload PDF/EPUB books once and see your whole shelf, with your progress on each book. |
+| **Reader** | Full-screen reading on PC or phone, with highlighting, freehand drawing, an eraser, a page jump box and an **End reading** button that saves where you are. |
+| **Words** | Every word or phrase you saved while reading, with your own explanation. Search, filter by book, or jump back to the page it came from. |
+| **Quotes** | Every passage you saved, with your own notes, searchable and filterable by book. |
+
+### Extras
+
+- 🔁 **Cross-device sync**: progress, highlights and drawings live in MongoDB, not in one browser. Start on your PC, continue on your phone.
+- 📍 **Resume exactly where you stopped**: the page *and* the scroll position are saved automatically as you read.
+- 🖍️ **Highlights**: select text and it's saved as ratio coordinates (0–1 of the page), so it lines up on any screen size.
+- ✏️ **Freehand drawing**: a transparent canvas over every page. Sketch, underline, circle things, and it's all saved.
+- 🧽 **Eraser**: hold left click and drag over a highlight or stroke to remove it.
+- 📝 **Words & Quotes**: tap **📝 Word** or **❝ Quote** on any selection, or type/paste your own.
+- 🤖 **Ask AI**: select text (or type a follow-up) and get a very simple, child-level explanation with no analogies.
+- ⛶ **Fullscreen mode**: native Fullscreen API toggle in the reader toolbar.
+- ☁️ **Upload once, read anywhere**: books are stored server-side, so there's no copying PDFs between devices.
+
+## How It Works
+
+```
+┌──────────────────┐                      ┌──────────────────────────┐
+│  PC browser      │                      │  server/public/          │
+│  Phone browser   │ ───────────────────► │  index.html · reader.html│
+│  (same URL)      │   static UI + PDF.js │  (vanilla JS, no build)  │
+└──────────────────┘                      └────────────┬─────────────┘
+                                                       │  /api/*
+                                                       ▼
+                                          ┌──────────────────────────┐
+                                          │  server/server.js        │
+                                          │  (Express)               │
+                                          │  books · annotations ·   │
+                                          │  words · quotes · AI     │
+                                          └───────┬──────────┬───────┘
+                                                  │          │
+                                                  ▼          ▼
+                                        ┌────────────────┐  ┌──────────────────┐
+                                        │ MongoDB Atlas  │  │ apmix.ai         │
+                                        │ books, notes,  │  │ (Anthropic-      │
+                                        │ progress, files│  │ compatible API)  │
+                                        └────────────────┘  └──────────────────┘
 ```
 
-## 2. Configure
+- **Frontend**: static pages (`index.html`, `reader.html`) in vanilla HTML/CSS/JS with a local copy of PDF.js. No build step, no CDN dependency.
+- **Backend**: an Express app in `server/server.js` that stores everything in MongoDB.
+- **Files**: PDFs/EPUBs are stored in the cloud (MongoDB GridFS bucket `bookfiles`). On Vercel they go to **Vercel Blob**, auto-detected through `BLOB_READ_WRITE_TOKEN`. Locally, without that variable, they fall back to disk.
+- **Hosting**: runs locally, on a small VPS, or on **Vercel** as a single serverless function that serves both the API and the static files.
+
+### Under the hood
+
+- **Reading position**: every scroll is debounced and saved as `{ lastPage, lastScrollRatio }` on the book document.
+- **Highlights**: the browser's selection rectangles are converted to ratio coordinates and stored as a `highlight` annotation tied to a page.
+- **Drawing**: strokes are captured as ratio-coordinate points and stored as `drawing` annotations, redrawn identically on any screen.
+- **Ask AI**: selected text goes to `/api/ai/explain`, which calls `AI_BASE_URL/v1/messages`. The system prompt permanently enforces "explain like I'm a child, no analogies."
+
+## Project Structure
+
+```
+Shelf/
+├── api/
+│   └── index.js               # Vercel entry point, re-exports server/server.js
+├── server/
+│   ├── server.js              # Express app (standalone or as the Vercel function)
+│   ├── package.json           # deps for local npm install / npm start
+│   ├── models/
+│   │   ├── Book.js            # Book + reading-progress schema
+│   │   └── Annotation.js      # Highlight / drawing schema
+│   ├── routes/
+│   │   ├── books.js           # Upload, list, stream file, progress, delete
+│   │   ├── annotations.js     # CRUD for highlights and drawings
+│   │   └── ai.js              # Calls apmix.ai with the child-level system prompt
+│   ├── public/
+│   │   ├── index.html, js/library.js   # Library / upload UI
+│   │   ├── reader.html, js/reader.js   # PDF.js reader, highlight, draw, AI
+│   │   ├── css/style.css
+│   │   └── vendor/                     # local PDF.js
+│   └── .env.example
+├── package.json               # root deps for Vercel's install
+└── vercel.json                # routes everything to api/index.js, bundles server/public/
+```
+
+## API Endpoints
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/books` | List every book in the library |
+| `POST` | `/api/books` | Upload a PDF/EPUB |
+| `GET` | `/api/books/:id/file` | Stream a book's file |
+| `PUT` | `/api/books/:id/progress` | Save last page and scroll position |
+| `DELETE` | `/api/books/:id` | Delete a book |
+| `GET` / `POST` / `DELETE` | `/api/annotations` | Load, save and erase highlights and drawings |
+| `GET` / `POST` / `PUT` / `DELETE` | `/api/vocabs` | Saved words and your explanations |
+| `GET` / `POST` / `PUT` / `DELETE` | `/api/quotes` | Saved quotes and your notes |
+| `POST` | `/api/ai/explain` | Ask AI to explain selected text in simple language |
+
+> Check the exact paths against `server/routes/*.js` and adjust this table if they differ.
+
+## Running Locally
 
 ```bash
+git clone https://github.com/<you>/<repo>.git
+cd <repo>/server
+npm install
 cp .env.example .env
 ```
 
-Then edit `.env`:
+Edit `.env`:
 
 | Variable | What it is |
 |---|---|
@@ -30,146 +136,40 @@ Then edit `.env`:
 | `AI_API_KEY` | Your apmix.ai API key |
 | `AI_MODEL` | `claude-sonnet-4-6-free` |
 
-## 3. Run
-
-Make sure MongoDB is running (locally: `mongod`, or use Atlas and paste its URI into `MONGO_URI`).
+Make sure MongoDB is running (`mongod`, or paste your Atlas URI), then:
 
 ```bash
 npm start
 ```
 
-Open `http://localhost:4000` on your PC. On your phone, open `http://<your-pc-lan-ip>:4000`
-while on the same Wi-Fi (or deploy it to any small VPS so it's reachable from anywhere —
-that's what makes the sync actually cross-device).
-
-## How it works
-
-- **Upload** — PDF/EPUB files are stored in MongoDB Atlas (GridFS bucket `bookfiles`) and linked to the book document in `books` via `fileId`.
-- **Reading position** — every scroll is debounced and saved as `{ lastPage, lastScrollRatio }` on the
-  `Book` document, so reopening a book resumes exactly there, on any device.
-- **Highlights** — selecting text captures the browser's selection rectangles, converts them to
-  ratio coordinates (0–1 of the page), and stores them as a `highlight` annotation tied to that page.
-  They're redrawn at those same ratios regardless of screen size.
-- **Drawing** — a transparent canvas sits over each page; strokes are captured as ratio-coordinate
-  points and saved as `drawing` annotations, redrawn the same way.
-- **Fullscreen** — the reader toolbar has a fullscreen toggle (`⛶`) using the native Fullscreen API.
-- **Ask AI** — selected text (or a typed follow-up) is sent to `/api/ai/explain`, which calls
-  `AI_BASE_URL/v1/messages` with your `AI_API_KEY`. The system prompt permanently enforces
-  "explain like I'm a child, no analogies," regardless of what's asked.
-
-## Notes / limitations of this build
-
-- EPUB currently renders as plain continuous text (no pagination/epub.js yet) — PDF is the fully
-  built-out path with highlighting, drawing, and resume-position. Swap in `epub.js` if you want
-  proper EPUB pagination later; the annotation system (ratio-based rects/points per "page") will
-  still work the same way.
-- This is single-user by design (no login) — every book/annotation is just stored globally. Add
-  an `ownerId` field + auth if you ever need multiple people on the same instance.
-- Eraser mode: hold left click and drag over a highlight or a drawn stroke to remove it on contact.
+Open `http://localhost:4000` on your PC. On your phone, open `http://<your-pc-lan-ip>:4000` on the same Wi-Fi. To read from anywhere, deploy it (below).
 
 ## Deploying on Vercel
 
-Vercel's functions have a **read-only, ephemeral filesystem** — a file saved during one
-request isn't there on the next one. So on Vercel this app stores uploaded books in
-**Vercel Blob** instead of `server/uploads/` (it auto-detects this via the
-`BLOB_READ_WRITE_TOKEN` env var — locally, without that var, it still just uses disk).
+Vercel's functions have a read-only, ephemeral filesystem, so uploaded books go to **Vercel Blob** instead of disk.
 
-The repo root has:
-- `api/index.js` — a one-line file that re-exports the Express app from `server/server.js`.
-  Vercel auto-detects anything under `/api` as a serverless function (no config needed for that part).
-- `package.json` — a root-level copy of the dependencies, since Vercel installs packages
-  starting from the repo root, not from `server/package.json`.
-- `vercel.json` — rewrites every request to that one function, and tells Vercel to bundle
-  `server/public/**` into it (so `express.static` can actually find those files at runtime).
+1. **Push to GitHub.**
+2. **Import into Vercel** at [vercel.com/new](https://vercel.com/new). Framework preset: **Other**. **Leave Root Directory as the repo root**, not `server/`.
+3. **Add MongoDB Atlas**: create a free cluster, allow `0.0.0.0/0` under Network Access, and copy the `mongodb+srv://...` string.
+4. **Add a Vercel Blob store**: Project → Storage → Create Database → Blob. This injects `BLOB_READ_WRITE_TOKEN` automatically.
+5. **Set environment variables** under Settings → Environment Variables: `MONGO_URI`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`.
+6. **Deploy**, then open the Vercel URL on your PC and phone. Same backend, same database, same highlights, drawings and place in the book.
 
-### Steps
+### Vercel notes
 
-1. **Push to GitHub**
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
-   git remote add origin https://github.com/<you>/<repo>.git
-   git push -u origin main
-   ```
+- A 404 or HTML "page not found" on `/api/...` almost always means Root Directory points at `server/`. Fix it under Settings → General and redeploy.
+- The first request after idle time is slower because it reconnects to MongoDB. Warm requests reuse the connection.
+- The 200MB upload limit in the code is higher than Vercel's request body limit (a few MB on Hobby), so large PDFs may fail there but work fine on a VPS or locally.
 
-2. **Import into Vercel**
-   - Go to [vercel.com/new](https://vercel.com/new) and import the GitHub repo.
-   - Framework preset: choose **"Other"**.
-   - **Root Directory: leave it as the repo root** (don't point it at `server/`) — `vercel.json`,
-     `package.json`, and `api/` all need to be visible from there, or Vercel won't find them and
-     you'll get a 404 on every route, including `/api/...`.
-   - Leave build/output settings default; `vercel.json` takes care of the rest.
+## Limitations
 
-3. **Add a MongoDB database Vercel can reach**
-   - Use [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) (free tier is fine) — Vercel's
-     functions can't reach a `mongodb://127.0.0.1` on your own machine.
-   - In Atlas: Network Access → allow `0.0.0.0/0` (or Vercel's IP ranges) so the functions can connect.
-   - Copy the `mongodb+srv://...` connection string.
+- **EPUB** currently renders as plain continuous text. PDF is the fully built path (highlighting, drawing, resume). Swap in `epub.js` later for proper pagination; the ratio-based annotation system will work the same way.
+- **Single-user by design**: no login, everything is stored globally. Add an `ownerId` field and auth if more people ever share the instance.
 
-4. **Add a Vercel Blob store**
-   - In your Vercel project → **Storage** tab → **Create Database** → **Blob**.
-   - Connect it to the project — this automatically injects `BLOB_READ_WRITE_TOKEN` as an
-     environment variable, so you don't need to set it by hand.
+## Credits
 
-5. **Set environment variables**
-   In the project → **Settings → Environment Variables**, add:
+- 📖 PDF.js, for rendering the books.
+- 🤖 apmix.ai, for the Anthropic-compatible API behind Ask AI.
+- ☕ Myself, for finally making reading easy enough to actually do.
 
-   | Key | Value |
-   |---|---|
-   | `MONGO_URI` | your Atlas connection string |
-   | `AI_BASE_URL` | `https://api.apmix.ai` |
-   | `AI_API_KEY` | your apmix.ai API key |
-   | `AI_MODEL` | `claude-sonnet-4-6-free` |
-
-   (`BLOB_READ_WRITE_TOKEN` is already set automatically from step 4; `PORT` isn't needed on Vercel.)
-
-6. **Deploy**
-   - Click **Deploy**. Vercel builds `api/index.js` as a serverless function, bundling in
-     `server/public/` (per `vercel.json`'s `includeFiles`), and `rewrites` sends every path —
-     `/`, `/reader.html`, `/api/books`, etc. — to that one function, which is the Express app
-     itself handling both static files and the API.
-   - Once live, open the Vercel URL on both your PC and phone — same backend, same database,
-     same highlights/drawings/resume-position on both.
-
-### Notes specific to the Vercel deployment
-
-- If you still get a 404 / an HTML "page not found" response instead of JSON from `/api/...`
-  after deploying, it's almost always the **Root Directory** project setting pointing at `server/`
-  instead of the repo root — fix it under Project → Settings → General → Root Directory, then redeploy.
-- Cold starts: the first request after idle time connects to MongoDB, so it can be a bit
-  slower; subsequent requests on the same warm instance reuse that connection.
-- The 200MB upload limit in the code is higher than what Vercel's request body limit actually
-  allows on serverless functions (typically a few MB on the Hobby plan) — large PDFs may fail
-  to upload there even though they'd work fine on your own VPS/local server.
-
-## Project structure
-
-```
-api/
-  index.js               # Vercel entry point — just re-exports server/server.js
-server/
-  server.js              # Express app (works standalone locally, or as the Vercel function)
-  package.json           # deps, for local `npm install` / `npm start`
-  models/Book.js          # Book + reading-progress schema
-  models/Annotation.js    # Highlight / drawing schema
-  routes/books.js          # Upload, list, stream file, progress, delete
-  routes/annotations.js    # CRUD for highlights/drawings
-  routes/ai.js              # Calls apmix.ai with the child-level system prompt
-  public/
-    index.html, js/library.js   # Library / upload UI
-    reader.html, js/reader.js   # PDF.js reader, highlight/draw/AI
-    css/style.css
-    vendor/                      # local copy of PDF.js (no external CDN dependency)
-  .env.example
-package.json              # deps for Vercel's root-level install
-vercel.json                # routes everything to api/index.js, bundles server/public/
-```
-
-## Words, phrases & quotes
-
-- While reading, select text and tap **📝 Word** or **❝ Quote** (or press the 📝 toolbar button to paste/type your own).
-- They appear on the **Words** and **Quotes** pages on the home screen, saved in MongoDB (collections `vocabs` and `quotes`),
-  where you can write an explanation/note for each, edit, search, filter by book, or jump back to the page you saved it from.
-- Use the **Page** box in the reader's top bar to jump to a page. **End reading** saves the page that is on screen.
+*Personal project. Built to make reading a habit instead of a chore.*
